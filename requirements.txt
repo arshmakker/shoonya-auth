@@ -1,0 +1,7 @@
+NorenRestApiPy>=0.0.22
+PyYAML>=5.4.1
+selenium>=4.10.0
+pyotp>=2.8.0
+websocket-client>=1.0.0
+requests>=2.26.0
+flask>=2.3.0

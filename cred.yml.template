@@ -1,0 +1,30 @@
+# Shared Shoonya OAuth credentials
+# Location : ~/.shoonya/cred.yml  (chmod 600, never commit)
+# Used by  : shoonya-auth/login.py, shoonya-auth/broker_proxy.py,
+#            regimetrader/main.py (no-proxy fallback),
+#            flowTrader/main.py   (no-proxy fallback)
+
+# ── Operator-set fields (fill once) ──────────────────────────────────────────
+UID: "YOUR_USER_ID"
+client_id: "YOUR_CLIENT_ID"
+Secret_Code: "YOUR_64_CHAR_SECRET_CODE"   # must be 64 chars from Shoonya portal
+
+oauth_url:      "https://trade.shoonya.com/NorenWeb/authorize/oauth"
+token_url:      "https://api.shoonya.com/NorenWClientAPI//GenAcsTok"   # double-slash intentional
+oauth_api_host: "https://api.shoonya.com/NorenWClientAPI/"
+oauth_ws_endpoint: "wss://api.shoonya.com/NorenWS/"
+
+oauth_reauth_attempts: 2
+
+# ── Optional: auto-fetch auth code (one of the two below) ────────────────────
+# auth_code_cmd: "python3 /path/to/getAuthCode.py"   # external script
+# selenium_user_id:     "YOUR_USER_ID"               # in-process Selenium
+# selenium_password:    "YOUR_PASSWORD"
+# selenium_totp_secret: "YOUR_TOTP_BASE32_SECRET"
+
+# ── Optional: operator alerts ─────────────────────────────────────────────────
+# ALERTS_NTFY_TOPIC_URL: "https://ntfy.sh/your-private-topic"
+
+# ── Runtime-managed (do not prefill) ─────────────────────────────────────────
+Access_token: ""
+Account_ID: ""
