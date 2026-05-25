@@ -1,5 +1,60 @@
+# Shoonya auth — gitignore
+
+# These files are proprietary / downloaded from Shoonya portal at setup time
 api_helper.py
 shoonya_selenium_auth.py
+
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Virtual Environment
+venv/
+env/
+
+# Credentials & Secrets — NEVER commit these
 cred.yml
+cred.yaml
+cred.local.yml
+cred.local.yaml
+*.secrets.yml
+*.env
+.env
+*.pem
+token*.json
+tokens/
+oauth*.json
+oauth*.txt
+auth_code.txt
+auth_code*.txt
+
+# Logs
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+.cursor/
+.claude/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# pytest / linters
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Temporary
+*.tmp
+*.bak
+*.backup

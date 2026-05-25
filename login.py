@@ -25,7 +25,7 @@ import yaml
 # api_helper.py and shoonya_selenium_auth.py live in the same directory (symlinks).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from api_helper import ShoonyaApiPy
-from trading_system.auth import shoonya_selenium_auth  # via api_helper's package
+import shoonya_selenium_auth  # symlink to regimetrader/trading_system/auth/shoonya_selenium_auth.py
 
 SHARED_CRED = os.path.expanduser("~/.shoonya/cred.yml")
 DEFAULT_AUTH_CODE_SCRIPT = "/Users/arshdeep/git/Shoonya_oAuth_API.py/tests/getAuthCode.py"

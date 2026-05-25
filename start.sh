@@ -35,7 +35,13 @@ echo "🚀 Starting trading session..."
 
 # Window 0 — broker_proxy (handles auto-login if token is stale)
 tmux new-session -d -s "$SESSION" -n "proxy" -x 220 -y 50
+
+# Enable pane border labels (shows badge at top of each pane)
+tmux set-option -t "$SESSION" pane-border-status top
+tmux set-option -t "$SESSION" pane-border-format " #{pane_title} "
+
 tmux send-keys -t "$SESSION:proxy" "cd $DIR && python broker_proxy.py" Enter
+tmux select-pane -t "$SESSION:proxy.0" -T "🔌 broker_proxy"
 
 # Wait up to 90s for proxy to be healthy
 echo "⏳ Waiting for broker proxy to be ready..."
@@ -66,10 +72,12 @@ tmux split-window -t "$SESSION:proxy.1" -v -p 50
 # Pane 1 (bottom-left): regimetrader
 tmux send-keys -t "$SESSION:proxy.1" \
     "cd $REGIME_DIR && BROKER_PROXY_URL=$PROXY_URL python main.py" Enter
+tmux select-pane -t "$SESSION:proxy.1" -T "📈 regimetrader"
 
 # Pane 2 (bottom-right): flowTrader
 tmux send-keys -t "$SESSION:proxy.2" \
     "cd $FLOW_DIR && BROKER_PROXY_URL=$PROXY_URL python main.py" Enter
+tmux select-pane -t "$SESSION:proxy.2" -T "🌊 flowTrader"
 
 echo ""
 echo "📺 Layout:"
