@@ -8,6 +8,7 @@ SESSION="trading"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 REGIME_DIR="$HOME/git/regimetrader"
 FLOW_DIR="$HOME/git/flowTrader"
+ADVISOR_DIR="$HOME/git/portfolio-advisor"
 PROXY_URL="http://127.0.0.1:7890"
 CRED_FILE="$HOME/.shoonya/cred.yml"
 
@@ -61,15 +62,22 @@ for i in $(seq 1 90); do
     fi
 done
 
-# Split proxy window into 3 panes: proxy (top), regime (bottom-left), flow (bottom-right)
-# First split horizontally: proxy on top, bottom pane for regime+flow
+# Split proxy window into 4 panes:
+#   Pane 0 (top-left):     broker_proxy
+#   Pane 1 (bottom-left):  regimetrader
+#   Pane 2 (bottom-right): flowTrader
+#   Pane 3 (top-right):    portfolio-advisor
+
+# Split right half off (pane 1 on the right)
 tmux split-window -t "$SESSION:proxy" -h -p 50
 
-# Split bottom pane vertically for regime and flow
+# Split right pane vertically: pane 1 (top-right), pane 2 (bottom-right)
 tmux split-window -t "$SESSION:proxy.1" -v -p 50
 
-# Pane 0 (top): proxy is already running
-# Pane 1 (bottom-left): regimetrader
+# Split left pane (proxy) vertically: pane 0 (top-left), pane 3 (bottom-left)
+tmux split-window -t "$SESSION:proxy.0" -v -p 40
+
+# Pane 1 (top-right): regimetrader
 tmux send-keys -t "$SESSION:proxy.1" \
     "cd $REGIME_DIR && BROKER_PROXY_URL=$PROXY_URL python main.py" Enter
 tmux select-pane -t "$SESSION:proxy.1" -T "📈 regimetrader"
@@ -79,11 +87,17 @@ tmux send-keys -t "$SESSION:proxy.2" \
     "cd $FLOW_DIR && BROKER_PROXY_URL=$PROXY_URL python main.py" Enter
 tmux select-pane -t "$SESSION:proxy.2" -T "🌊 flowTrader"
 
+# Pane 3 (bottom-left): portfolio-advisor
+tmux send-keys -t "$SESSION:proxy.3" \
+    "cd $ADVISOR_DIR && BROKER_PROXY_URL=$PROXY_URL ANTHROPIC_API_KEY=\$ANTHROPIC_API_KEY python main.py" Enter
+tmux select-pane -t "$SESSION:proxy.3" -T "🧠 portfolio-advisor"
+
 echo ""
 echo "📺 Layout:"
-echo "   Pane 0 (top)       → proxy (broker_proxy.py)"
-echo "   Pane 1 (bottom-L)  → regimetrader"
+echo "   Pane 0 (top-L)     → broker_proxy"
+echo "   Pane 1 (top-R)     → regimetrader"
 echo "   Pane 2 (bottom-R)  → flowTrader"
+echo "   Pane 3 (bottom-L)  → portfolio-advisor (read-only, recommendations only)"
 echo "   Ctrl-b arrow keys  → navigate panes"
 echo "   Ctrl-b z           → zoom pane (Ctrl-b z again to unzoom)"
 echo "   Ctrl-b d           → detach (keeps running)"
