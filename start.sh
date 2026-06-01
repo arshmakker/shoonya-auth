@@ -89,7 +89,7 @@ tmux select-pane -t "$SESSION:proxy.2" -T "🌊 flowTrader"
 
 # Pane 3 (bottom-left): portfolio-advisor
 tmux send-keys -t "$SESSION:proxy.3" \
-    "cd $ADVISOR_DIR && BROKER_PROXY_URL=$PROXY_URL ANTHROPIC_API_KEY=\$ANTHROPIC_API_KEY python main.py" Enter
+    "cd $ADVISOR_DIR && BROKER_PROXY_URL=$PROXY_URL python main.py" Enter
 tmux select-pane -t "$SESSION:proxy.3" -T "🧠 portfolio-advisor"
 
 echo ""
