@@ -16,6 +16,9 @@ import argparse
 import logging
 import os
 import sys
+import threading
+import time
+from datetime import datetime, timezone, timedelta
 
 import yaml
 from flask import Flask, jsonify, request
@@ -103,6 +106,25 @@ def call_method():
         return jsonify({"error": str(exc)}), 502
 
 
+_IST = timezone(timedelta(hours=5, minutes=30))
+# Proxy shuts down at 15:40 IST — traders exit by ~15:35, this gives them a clean buffer.
+_PROXY_SHUTDOWN_TIME = (15, 40)
+
+
+def _market_close_watchdog() -> None:
+    """Background thread: sleep until 15:40 IST, then exit the proxy."""
+    now = datetime.now(_IST)
+    h, m = _PROXY_SHUTDOWN_TIME
+    target = now.replace(hour=h, minute=m, second=0, microsecond=0)
+    if now >= target or now.weekday() >= 5:
+        return  # already past shutdown time, or weekend — don't auto-exit
+    delay = (target - now).total_seconds()
+    log.info("Market-close watchdog armed — will shut down at %02d:%02d IST (%.0fs)", h, m, delay)
+    time.sleep(delay)
+    log.info("Market closed — proxy shutting down")
+    os._exit(0)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Shoonya OAuth broker proxy")
     parser.add_argument("--port", type=int, default=7890)
@@ -114,6 +136,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     _api = _init_api(args.cred_file)
+
+    t = threading.Thread(target=_market_close_watchdog, daemon=True, name="market-close-watchdog")
+    t.start()
+
     # threaded=True: Flask handles concurrent requests in separate threads.
     # The ShoonyaApiPy rate limiter uses threading.Lock internally — thread-safe.
     # Never use debug=True here (spawns a second process, second ShoonyaApiPy instance).
