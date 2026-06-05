@@ -27,7 +27,7 @@ tmux has-session -t trading 2>/dev/null && echo "RUNNING" || echo "NOT STARTED"
   This will invoke the `monitor-trading` skill every 10 minutes to check all panes for errors, attempt code fixes, and restart any crashed services.
 
 ### What the monitor does each cycle
-- Captures the last 200 lines from all 4 panes (broker_proxy, regimetrader, flowTrader, portfolio-advisor)
+- Captures the last 200 lines from all 5 panes (broker_proxy, regimetrader, flowTrader, portfolio-advisor, bsensearb)
 - Detects Python errors, tracebacks, and silent crashes
 - Attempts minimal code fixes for clear errors (ImportError, SyntaxError, etc.)
 - Restarts the affected pane
@@ -39,14 +39,16 @@ See `.claude/skills/monitor-trading/SKILL.md` for full details.
 
 ## Project Overview
 This repo provides centralized OAuth login and a broker proxy for the Shoonya trading API.
+All trading projects live under `~/git/trading/`.
 
 ### Services (started by start.sh)
-| Service | Pane | Port |
-|---------|------|------|
-| broker_proxy | proxy.0 | 7890 |
-| regimetrader | proxy.1 | — |
-| flowTrader | proxy.2 | — |
-| portfolio-advisor | proxy.3 | — |
+| Service | Pane | Port | Path |
+|---------|------|------|------|
+| broker_proxy | proxy.0 | 7890 | `~/git/trading/shoonya-auth` |
+| regimetrader | proxy.1 | — | `~/git/trading/regimetrader` |
+| flowTrader | proxy.2 | — | `~/git/trading/flowTrader` |
+| portfolio-advisor | proxy.3 | — | `~/git/trading/portfolio-advisor` |
+| bsensearb | proxy.4 | — | `~/git/trading/bsensearb` |
 
 ### Credentials
 - Stored at `~/.shoonya/cred.yml` (never in this repo)

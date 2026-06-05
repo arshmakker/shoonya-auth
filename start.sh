@@ -6,10 +6,10 @@ set -euo pipefail
 
 SESSION="trading"
 DIR="$(cd "$(dirname "$0")" && pwd)"
-REGIME_DIR="$HOME/git/regimetrader"
-FLOW_DIR="$HOME/git/flowTrader"
-ADVISOR_DIR="$HOME/git/portfolio-advisor"
-BSENSE_DIR="$HOME/git/bsensearb"
+REGIME_DIR="$HOME/git/trading/regimetrader"
+FLOW_DIR="$HOME/git/trading/flowTrader"
+ADVISOR_DIR="$HOME/git/trading/portfolio-advisor"
+BSENSE_DIR="$HOME/git/trading/bsensearb"
 PROXY_URL="http://127.0.0.1:7890"
 CRED_FILE="$HOME/.shoonya/cred.yml"
 
