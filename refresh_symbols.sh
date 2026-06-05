@@ -7,6 +7,7 @@ set -euo pipefail
 TARGETS=(
     "/Users/arshdeep/git/regimetrader/symbols"
     "/Users/arshdeep/git/flowTrader/symbols"
+    "/Users/arshdeep/git/bsensearb/symbols"
 )
 
 SEGMENTS=(NSE NFO BSE MCX)
