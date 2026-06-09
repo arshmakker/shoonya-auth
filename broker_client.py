@@ -55,6 +55,9 @@ class BrokerClient:
                     )
                     return None
                 return r.json()
+            except requests.exceptions.Timeout as exc:
+                log.warning("BrokerClient.%s timed out: %s", name, exc)
+                return None
             except Exception as exc:
                 log.error("BrokerClient.%s failed: %s", name, exc)
                 return None

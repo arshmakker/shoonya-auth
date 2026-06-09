@@ -28,6 +28,8 @@ tmux capture-pane -t trading:proxy.<N> -p -S -200
 
 ### Step 3 — Detect errors in captured output
 
+**IMPORTANT — scope to current run only:** The pane buffer may contain output from previous runs (e.g., a `KeyboardInterrupt` or `Traceback` from the run that was killed to restart the process). Before scanning for errors, find the LAST occurrence of a "STARTING" or "Starting" banner (e.g., `=== PCR CREDIT SPREAD SYSTEM STARTING ===`, `=== Starting Trading System ===`, `broker_proxy starting`, etc.) in the captured lines. Only scan lines AFTER that banner. If no banner is found, scan all lines.
+
 Look for any of these patterns (case-insensitive where noted):
 - `Traceback (most recent call last)`
 - `^ERROR` or `\bERROR\b` (not in normal log lines like `INFO`)
@@ -42,6 +44,8 @@ Look for any of these patterns (case-insensitive where noted):
 **False positives to ignore:**
 - Lines that contain `except` or `raise` as Python keywords in code being printed
 - Log lines that mention an error in a handled/recovered way (e.g., `Handled ValueError, retrying...`)
+- Any `Traceback` / `KeyboardInterrupt` / error lines that appear BEFORE the last "STARTING" banner — these are from prior runs and must be ignored
+- A pane that shows a healthy startup banner followed by normal INFO log lines, even if the last log line is several minutes old — silence is normal when no trades or alerts are pending (verify with `kill -0 <pid>` from the PID file before declaring dead)
 
 ### Step 4 — For each pane with errors
 
@@ -95,3 +99,39 @@ If nothing was wrong, a single line suffices:
   ```
 - **portfolio-advisor errors**: This pane is advisory/read-only. Restart it but do not block on it or treat it as critical.
 - **Repeated crash (same pane crashes again within the same check cycle after restart)**: Report to the user and do NOT restart a third time in the same cycle. Leave it for human review.
+
+## bsensearb (pane 4) — LIVE TRADING SAFETY RULES
+
+**bsensearb is live (10L capital, real orders). Apply stricter rules than other panes:**
+
+### Order errors → STOP immediately, do NOT restart
+If any of the following appear in the bsensearb pane output after the last "STARTING" banner:
+- Any line containing `place_order` alongside `ERROR`, `Exception`, `failed`, or `rejected`
+- Any line containing `order` and `Traceback`
+- Log lines indicating unexpected order state: `duplicate order`, `insufficient funds`, `margin`, `RMS`, `OMS`
+- Any `CRITICAL` log line
+- Repeated `timeout` on order status checks (more than 3 consecutive timeouts logged)
+
+**Action: STOP bsensearb immediately — do NOT restart.**
+```bash
+tmux send-keys -t trading:proxy.4 C-c
+sleep 1
+tmux send-keys -t trading:proxy.4 C-c
+```
+Then alert the user with a clear message:
+```
+🚨 bsensearb STOPPED — order error detected: <exact log line>
+   Manual review required before restarting.
+```
+
+### Code/infra errors → STOP, report, do NOT auto-restart
+If bsensearb has a Python traceback or connection error (not order-related):
+- **Do NOT auto-restart** (unlike other panes)
+- Stop the process with C-c
+- Report the error to the user and wait for explicit approval to restart
+
+### Normal warnings to ignore
+- `WARNING - No symbols passed ADV/value filters` — harmless, fallback to Nifty50
+- `WARNING - Top-active filter returned no symbols` — harmless fallback
+- Short leg quote unavailable warnings — pre-open, not bsensearb
+- Collection cycle complete lines — healthy operation
