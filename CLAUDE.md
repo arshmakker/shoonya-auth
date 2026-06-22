@@ -21,7 +21,7 @@ tmux has-session -t trading 2>/dev/null && echo "RUNNING" || echo "NOT STARTED"
 - Report the status briefly, then immediately start the monitoring loop:
 
   ```
-  /loop 10m monitor-trading
+  start /loop 10m monitor-trading at 9:07am IST
   ```
 
   This will invoke the `monitor-trading` skill every 10 minutes to check all panes for errors, attempt code fixes, and restart any crashed services.

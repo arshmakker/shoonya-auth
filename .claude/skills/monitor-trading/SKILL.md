@@ -14,6 +14,23 @@ Monitor all tmux panes in the `trading` session for errors, attempt code fixes, 
 
 ## Monitoring Steps (run every iteration)
 
+### Step 0 — Check market hours
+```bash
+python3 -c "
+from datetime import datetime, timezone, timedelta
+IST = timezone(timedelta(hours=5, minutes=30))
+now = datetime.now(IST)
+market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
+market_close = now.replace(hour=15, minute=40, second=0, microsecond=0)
+is_weekend = now.weekday() >= 5
+within_hours = not is_weekend and market_open <= now <= market_close
+print('WITHIN_HOURS' if within_hours else 'AFTER_HOURS')
+print(now.strftime('%H:%M IST'))
+"
+```
+
+**If AFTER_HOURS:** Do NOT restart any pane — processes are expected to have exited. Only report their status. Skip Steps 4c (restart). Still capture panes and detect errors (for next morning awareness), but end the report with: `⏰ After market hours — no restarts attempted.`
+
 ### Step 1 — Confirm the session is still alive
 ```bash
 tmux has-session -t trading 2>/dev/null && echo "ALIVE" || echo "DEAD"
@@ -109,7 +126,7 @@ If any of the following appear in the bsensearb pane output after the last "STAR
 - Any line containing `place_order` alongside `ERROR`, `Exception`, `failed`, or `rejected`
 - Any line containing `order` and `Traceback`
 - Log lines indicating unexpected order state: `duplicate order`, `insufficient funds`, `margin`, `RMS`, `OMS`
-- Any `CRITICAL` log line
+- Any `CRITICAL` log line **except** sell-timeout CRITICALs (see "Normal warnings to ignore" below)
 - Repeated `timeout` on order status checks (more than 3 consecutive timeouts logged)
 
 **Action: STOP bsensearb immediately — do NOT restart.**
@@ -135,3 +152,4 @@ If bsensearb has a Python traceback or connection error (not order-related):
 - `WARNING - Top-active filter returned no symbols` — harmless fallback
 - Short leg quote unavailable warnings — pre-open, not bsensearb
 - Collection cycle complete lines — healthy operation
+- `CRITICAL - SELL TIMEOUT` followed by `CRITICAL - Emergency sell price` and `CRITICAL - Emergency aggressive-limit sell placed` — this is the designed timeout handler firing (cancel stale DAY order + place IOC limit). Report it as a warning in the status summary but do NOT stop bsensearb. Only escalate to STOP if the emergency sell itself errors (e.g. `Emergency sell` alongside `failed`, `rejected`, or `Exception`).

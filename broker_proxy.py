@@ -98,6 +98,13 @@ def call_method():
     try:
         result = method(*args, **kwargs)
         # ShoonyaApiPy methods return dicts, lists, or None.
+        if method_name == "place_order":
+            log.info("DEBUG place_order kwargs=%s → result=%s", kwargs, result)
+            # Also write to file — werkzeug flood scrolls stdout
+            import json as _json, datetime as _dt
+            _order_log = os.path.expanduser("~/git/trading/shoonya-auth/order_debug.log")
+            with open(_order_log, "a") as _f:
+                _f.write(f"{_dt.datetime.now().isoformat()} place_order kwargs={_json.dumps(kwargs)} result={_json.dumps(result)}\n")
         if result is None:
             return jsonify(None), 200
         return jsonify(result), 200
@@ -116,8 +123,11 @@ def _market_close_watchdog() -> None:
     now = datetime.now(_IST)
     h, m = _PROXY_SHUTDOWN_TIME
     target = now.replace(hour=h, minute=m, second=0, microsecond=0)
-    if now >= target or now.weekday() >= 5:
-        return  # already past shutdown time, or weekend — don't auto-exit
+    if now.weekday() >= 5:
+        return  # weekend — don't auto-exit
+    if now >= target:
+        log.info("Started after market close (%02d:%02d IST) — shutting down", h, m)
+        os._exit(0)
     delay = (target - now).total_seconds()
     log.info("Market-close watchdog armed — will shut down at %02d:%02d IST (%.0fs)", h, m, delay)
     time.sleep(delay)
