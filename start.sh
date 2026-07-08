@@ -9,7 +9,6 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 REGIME_DIR="$HOME/git/trading/regimetrader"
 FLOW_DIR="$HOME/git/trading/flowTrader"
 ADVISOR_DIR="$HOME/git/trading/portfolio-advisor"
-BSENSE_DIR="$HOME/git/trading/bsensearb"
 PROXY_URL="http://127.0.0.1:7890"
 CRED_FILE="$HOME/.shoonya/cred.yml"
 
@@ -101,19 +100,12 @@ tmux send-keys -t "$SESSION:proxy.3" \
     "cd $ADVISOR_DIR && BROKER_PROXY_URL=$PROXY_URL python main.py" Enter
 tmux select-pane -t "$SESSION:proxy.3" -T "🧠 portfolio-advisor"
 
-# Pane 4: bsensearb — split bottom-left pane vertically
-tmux split-window -t "$SESSION:proxy.3" -v -p 40
-tmux send-keys -t "$SESSION:proxy.4" \
-    "cd $BSENSE_DIR && BROKER_PROXY_URL=$PROXY_URL python main.py" Enter
-tmux select-pane -t "$SESSION:proxy.4" -T "⚡ bsensearb"
-
 echo ""
 echo "📺 Layout:"
 echo "   Pane 0 (top-L)     → broker_proxy"
 echo "   Pane 1 (top-R)     → regimetrader"
 echo "   Pane 2 (bottom-R)  → flowTrader"
 echo "   Pane 3 (bottom-L)  → portfolio-advisor (read-only, recommendations only)"
-echo "   Pane 4 (bottom-L)  → bsensearb (NSE-BSE arbitrage scanner, paper mode)"
 echo "   Ctrl-b arrow keys  → navigate panes"
 echo "   Ctrl-b z           → zoom pane (Ctrl-b z again to unzoom)"
 echo "   Ctrl-b d           → detach (keeps running)"
