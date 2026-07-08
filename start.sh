@@ -33,6 +33,14 @@ fi
 # Kill any stale session from a previous run
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
+# Force a fresh OAuth login on every start so the session binds to the CURRENT
+# public IP. On a dynamic IP a cached token stays "valid" for reads, but its
+# session is bound to the old IP and live orders get rejected with
+# "ALGO_CHK: Invalid IP address". Blanking Access_token makes broker_proxy
+# re-authenticate from scratch. (2026-07-08)
+echo "🔑 Forcing fresh OAuth login (clearing cached Access_token)..."
+sed -i '' 's/^Access_token:.*/Access_token: ""/' "$CRED_FILE"
+
 echo "🚀 Starting trading session..."
 
 # Window 0 — broker_proxy (handles auto-login if token is stale)
