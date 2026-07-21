@@ -13,6 +13,7 @@ and use BrokerClient instead of ShoonyaApiPy directly.
 """
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -20,6 +21,7 @@ import threading
 import time
 from datetime import datetime, timezone, timedelta
 
+import requests
 import yaml
 from flask import Flask, jsonify, request
 
@@ -75,6 +77,24 @@ def _init_api(cred_file: str) -> ShoonyaApiPy:
     return api
 
 
+def _raw_position_book(api: ShoonyaApiPy) -> dict:
+    """Re-issue PositionBook directly, bypassing NorenApi.get_positions()'s
+    collapsing of any non-list response to None. Needed to tell a genuinely
+    flat account ({"stat":"Not_Ok","emsg":"...no data..."}) apart from a
+    real broker/session error, which the library discards.
+    """
+    config = api._NorenApi__service_config
+    url = f"{config['host']}{config['routes']['positions']}"
+    values = {
+        "uid": api._NorenApi__username,
+        "actid": api._NorenApi__accountid,
+    }
+    payload = "jData=" + json.dumps(values)
+    res = requests.post(url, data=payload, headers=api._NorenApi__OAuthHeaders, timeout=15)
+    res.raise_for_status()
+    return json.loads(res.text)
+
+
 @app.route("/health", methods=["GET"])
 def health():
     ok = _api is not None and _api.validate_oauth_session()
@@ -105,6 +125,20 @@ def call_method():
             _order_log = os.path.expanduser("~/git/trading/shoonya-auth/order_debug.log")
             with open(_order_log, "a") as _f:
                 _f.write(f"{_dt.datetime.now().isoformat()} place_order kwargs={_json.dumps(kwargs)} result={_json.dumps(result)}\n")
+        if method_name == "get_positions" and result is None:
+            # A flat account and a real broker error both collapse to None
+            # here (see _raw_position_book docstring) — recover the raw
+            # stat/emsg to tell them apart before the caller has to halt.
+            try:
+                raw = _raw_position_book(_api)
+            except Exception as exc:
+                log.error("Proxy get_positions raw re-check failed: %s", exc, exc_info=True)
+                return jsonify({"error": f"positions re-check failed: {exc}"}), 502
+            if isinstance(raw, dict) and "no data" in str(raw.get("emsg", "")).lower():
+                return jsonify([]), 200
+            emsg = raw.get("emsg") if isinstance(raw, dict) else "malformed positions response"
+            log.error("Proxy get_positions: broker reported error: %s", emsg)
+            return jsonify({"error": emsg}), 502
         if result is None:
             return jsonify(None), 200
         return jsonify(result), 200
