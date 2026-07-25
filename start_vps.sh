@@ -47,7 +47,7 @@ tmux new-session -d -s "$SESSION" -n "proxy" -x 220 -y 50
 tmux set-option -t "$SESSION" pane-border-status top
 tmux set-option -t "$SESSION" pane-border-format " #{pane_title} "
 
-tmux send-keys -t "$SESSION:proxy" "cd $DIR && python3 broker_proxy.py" Enter
+tmux send-keys -t "$SESSION:proxy" "cd $DIR && ./venv/bin/python broker_proxy.py" Enter
 tmux select-pane -t "$SESSION:proxy.0" -T "🔌 broker_proxy"
 
 # Wait up to 90s for proxy to be healthy
@@ -72,7 +72,7 @@ done
 tmux split-window -t "$SESSION:proxy" -h -p 50
 
 tmux send-keys -t "$SESSION:proxy.1" \
-    "cd $REGIME_DIR && BROKER_PROXY_URL=$PROXY_URL python3 main.py" Enter
+    "cd $REGIME_DIR && BROKER_PROXY_URL=$PROXY_URL ./venv/bin/python main.py" Enter
 tmux select-pane -t "$SESSION:proxy.1" -T "📈 regimetrader"
 
 echo ""
