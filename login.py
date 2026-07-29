@@ -28,7 +28,10 @@ from api_helper import ShoonyaApiPy
 import shoonya_selenium_auth  # symlink to regimetrader/trading_system/auth/shoonya_selenium_auth.py
 
 SHARED_CRED = os.path.expanduser("~/.shoonya/cred.yml")
-DEFAULT_AUTH_CODE_SCRIPT = "/Users/arshdeep/git/Shoonya_oAuth_API.py/tests/getAuthCode.py"
+DEFAULT_AUTH_CODE_SCRIPT = os.environ.get(
+    "SHOONYA_AUTH_CODE_SCRIPT",
+    "/Users/arshdeep/git/Shoonya_oAuth_API.py/tests/getAuthCode.py",
+)
 
 
 def _load_creds(path=SHARED_CRED):
