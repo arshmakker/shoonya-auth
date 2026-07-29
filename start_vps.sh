@@ -75,7 +75,16 @@ for i in $(seq 1 90); do
 done
 
 # Split proxy window: pane 0 (left) broker_proxy, pane 1 (right) regimetrader
-tmux split-window -t "$SESSION:proxy" -h -p 50
+#
+# NOTE: `split-window -p <percent>` resolves the percentage against an
+# attached client's size, and this session is created detached (-d) and
+# never gets a client attached (headless/non-interactive launch, e.g. over
+# SSH without a pty). With no client to resolve against, tmux 3.4 fails
+# with "size missing" and the split — and everything after it — never
+# happens. `-l <columns>` (absolute size) has no such dependency, so
+# compute the half-width from the window's own known size instead.
+WIN_WIDTH=$(tmux display-message -p -t "$SESSION:proxy" '#{window_width}')
+tmux split-window -t "$SESSION:proxy" -h -l "$(( WIN_WIDTH / 2 ))"
 
 tmux send-keys -t "$SESSION:proxy.1" \
     "cd $REGIME_DIR && BROKER_PROXY_URL=$PROXY_URL ./venv/bin/python main.py" Enter

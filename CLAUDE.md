@@ -24,10 +24,10 @@ tmux has-session -t trading 2>/dev/null && echo "RUNNING" || echo "NOT STARTED"
   start /loop 10m monitor-trading at 9:07am IST
   ```
 
-  This will invoke the `monitor-trading` skill every 10 minutes to check all panes for errors, attempt code fixes, and restart any crashed services.
+  This will invoke the `monitor-trading` skill every 10 minutes to check broker_proxy and regimetrader for errors, attempt code fixes, and restart any crashed services.
 
 ### What the monitor does each cycle
-- Captures the last 200 lines from all 5 panes (broker_proxy, regimetrader, flowTrader, portfolio-advisor, bsensearb)
+- Captures the last 200 lines from broker_proxy and regimetrader panes
 - Detects Python errors, tracebacks, and silent crashes
 - Attempts minimal code fixes for clear errors (ImportError, SyntaxError, etc.)
 - Restarts the affected pane
@@ -46,9 +46,8 @@ All trading projects live under `~/git/trading/`.
 |---------|------|------|------|
 | broker_proxy | proxy.0 | 7890 | `~/git/trading/shoonya-auth` |
 | regimetrader | proxy.1 | — | `~/git/trading/regimetrader` |
-| flowTrader | proxy.2 | — | `~/git/trading/flowTrader` |
-| portfolio-advisor | proxy.3 | — | `~/git/trading/portfolio-advisor` |
-| bsensearb | proxy.4 | — | `~/git/trading/bsensearb` |
+
+Note: flowTrader, portfolio-advisor, and bsensearb are not part of this session's monitoring scope.
 
 ### Credentials
 - Stored at `~/.shoonya/cred.yml` (never in this repo)

@@ -1,6 +1,6 @@
 # Skill: monitor-trading
 
-Monitor all tmux panes in the `trading` session for errors, attempt code fixes, and restart affected services.
+Monitor the broker_proxy and regimetrader tmux panes in the `trading` session for errors, attempt code fixes, and restart affected services.
 
 ## Pane Map
 
@@ -8,9 +8,6 @@ Monitor all tmux panes in the `trading` session for errors, attempt code fixes, 
 |------|-------|-------------|-----------------|
 | `trading:proxy.0` | broker_proxy | `~/git/trading/shoonya-auth` | `python broker_proxy.py` |
 | `trading:proxy.1` | regimetrader | `~/git/trading/regimetrader` | `BROKER_PROXY_URL=http://127.0.0.1:7890 python main.py` |
-| `trading:proxy.2` | flowTrader | `~/git/trading/flowTrader` | `BROKER_PROXY_URL=http://127.0.0.1:7890 python main.py` |
-| `trading:proxy.3` | portfolio-advisor | `~/git/trading/portfolio-advisor` | `BROKER_PROXY_URL=http://127.0.0.1:7890 python main.py` |
-| `trading:proxy.4` | bsensearb | `~/git/trading/bsensearb` | `BROKER_PROXY_URL=http://127.0.0.1:7890 python main.py` |
 
 ## Monitoring Steps (run every iteration)
 
@@ -38,7 +35,7 @@ tmux has-session -t trading 2>/dev/null && echo "ALIVE" || echo "DEAD"
 If the session is DEAD, report it to the user and **stop the loop** — do not try to restart start.sh automatically.
 
 ### Step 2 — Capture the last 200 lines from each pane
-For each pane index 0–4:
+For each pane index 0–1:
 ```bash
 tmux capture-pane -t trading:proxy.<N> -p -S -200
 ```
@@ -99,57 +96,17 @@ After checking all panes, output a brief status summary:
   ✅ broker_proxy — OK
   ⚠️  regimetrader — ERROR detected: <one-line summary>
       → Fixed: <what was changed> | Restarted
-  ✅ flowTrader — OK
-  ✅ portfolio-advisor — OK
 ```
 
 If nothing was wrong, a single line suffices:
 ```
-🕐 [HH:MM] All 4 trading panes healthy ✅
+🕐 [HH:MM] Both trading panes healthy ✅
 ```
 
 ## Special Cases
 
-- **broker_proxy (pane 0) is down**: This will cascade to all other panes. Fix/restart broker_proxy first, wait for its `/health` endpoint to respond, then check the others.
+- **broker_proxy (pane 0) is down**: This will cascade to regimetrader. Fix/restart broker_proxy first, wait for its `/health` endpoint to respond, then check regimetrader.
   ```bash
   curl -sf http://127.0.0.1:7890/health
   ```
-- **portfolio-advisor errors**: This pane is advisory/read-only. Restart it but do not block on it or treat it as critical.
 - **Repeated crash (same pane crashes again within the same check cycle after restart)**: Report to the user and do NOT restart a third time in the same cycle. Leave it for human review.
-
-## bsensearb (pane 4) — LIVE TRADING SAFETY RULES
-
-**bsensearb is live (10L capital, real orders). Apply stricter rules than other panes:**
-
-### Order errors → STOP immediately, do NOT restart
-If any of the following appear in the bsensearb pane output after the last "STARTING" banner:
-- Any line containing `place_order` alongside `ERROR`, `Exception`, `failed`, or `rejected`
-- Any line containing `order` and `Traceback`
-- Log lines indicating unexpected order state: `duplicate order`, `insufficient funds`, `margin`, `RMS`, `OMS`
-- Any `CRITICAL` log line **except** sell-timeout CRITICALs (see "Normal warnings to ignore" below)
-- Repeated `timeout` on order status checks (more than 3 consecutive timeouts logged)
-
-**Action: STOP bsensearb immediately — do NOT restart.**
-```bash
-tmux send-keys -t trading:proxy.4 C-c
-sleep 1
-tmux send-keys -t trading:proxy.4 C-c
-```
-Then alert the user with a clear message:
-```
-🚨 bsensearb STOPPED — order error detected: <exact log line>
-   Manual review required before restarting.
-```
-
-### Code/infra errors → STOP, report, do NOT auto-restart
-If bsensearb has a Python traceback or connection error (not order-related):
-- **Do NOT auto-restart** (unlike other panes)
-- Stop the process with C-c
-- Report the error to the user and wait for explicit approval to restart
-
-### Normal warnings to ignore
-- `WARNING - No symbols passed ADV/value filters` — harmless, fallback to Nifty50
-- `WARNING - Top-active filter returned no symbols` — harmless fallback
-- Short leg quote unavailable warnings — pre-open, not bsensearb
-- Collection cycle complete lines — healthy operation
-- `CRITICAL - SELL TIMEOUT` followed by `CRITICAL - Emergency sell price` and `CRITICAL - Emergency aggressive-limit sell placed` — this is the designed timeout handler firing (cancel stale DAY order + place IOC limit). Report it as a warning in the status summary but do NOT stop bsensearb. Only escalate to STOP if the emergency sell itself errors (e.g. `Emergency sell` alongside `failed`, `rejected`, or `Exception`).
