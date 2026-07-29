@@ -63,7 +63,13 @@ for i in $(seq 1 90); do
     if [ "$i" -eq 90 ]; then
         echo "❌ Proxy did not become healthy in 90s"
         echo "   Attach to check: tmux attach -t $SESSION"
-        tmux attach-session -t "$SESSION"
+        # Only attach if we're in an interactive terminal — a non-interactive
+        # invocation (cron, systemd, ssh without -t) has no tty for tmux to
+        # attach to, and would otherwise error out or hang here instead of
+        # reaching the exit 1 below.
+        if [ -t 0 ]; then
+            tmux attach-session -t "$SESSION"
+        fi
         exit 1
     fi
 done
