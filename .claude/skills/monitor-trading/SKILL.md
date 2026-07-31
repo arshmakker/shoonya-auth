@@ -88,6 +88,29 @@ tmux send-keys -t trading:proxy.<N> "cd <WORKING_DIR> && <RESTART_COMMAND>" Ente
 ```
 3. Wait 5 seconds and re-capture the pane to confirm it started without immediately crashing
 
+### Step 4d — Check regimetrader P&L (WITHIN_HOURS only)
+
+Only regimetrader (the strategy in this session's monitoring scope) has a live P&L to check — broker_proxy has none.
+
+1. Find today's IC entry:
+```bash
+grep "IC.*ENTERED" ~/git/trading/regimetrader/logs/ic_system_$(date +%Y%m%d).log | tail -1
+```
+If no entry found, report "No IC entered today" and skip the rest of this step.
+
+2. Compute estimated unrealized P&L using the same method as the `unrealized-pnl` skill, Step 2 (quote-book mid / last-valid prices per leg, avg= entry prices, short/long P&L formula). Also note the entry `Credit=<pts> × qty` as `credit_value` (total credit collected in ₹).
+
+3. Evaluate against both thresholds — flag if EITHER trips:
+   - **Credit-erosion**: unrealized loss > 50% of `credit_value`
+   - **Fixed floor**: unrealized P&L < −₹5,000
+
+   (These are defaults — adjust here if the user gives different numbers.)
+
+4. If a threshold trips, add a suggestion to the report (do NOT auto-act on positions — this is a recommendation only):
+   - Loss > 50% of credit → suggest considering an early exit/adjustment of the IC (standard risk-mgmt threshold for credit spreads)
+   - Loss < −₹5,000 → suggest reviewing the position for a manual stop-out
+   - If a leg price is missing/stale, flag that the P&L estimate is incomplete before suggesting any action
+
 ### Step 5 — Report
 
 After checking all panes, output a brief status summary:
@@ -96,12 +119,16 @@ After checking all panes, output a brief status summary:
   ✅ broker_proxy — OK
   ⚠️  regimetrader — ERROR detected: <one-line summary>
       → Fixed: <what was changed> | Restarted
+  📊 regimetrader P&L: −₹6,200 (Credit=22.60pts, 10 lots) ⚠️ exceeds −₹5,000 floor
+      → Suggest: review IC for manual stop-out; loss is 82% of credit collected
 ```
 
-If nothing was wrong, a single line suffices:
+If nothing was wrong and P&L is within thresholds, a single line suffices:
 ```
-🕐 [HH:MM] Both trading panes healthy ✅
+🕐 [HH:MM] Both trading panes healthy ✅ | regimetrader P&L: +₹1,850 (within thresholds)
 ```
+
+If AFTER_HOURS or no IC entered today, omit the P&L line (or state "No IC entered today").
 
 ## Special Cases
 
