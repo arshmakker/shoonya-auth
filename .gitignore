@@ -58,3 +58,6 @@ htmlcov/
 *.tmp
 *.bak
 *.backup
+
+# Droplet sync/backup snapshots (see project memory: sole copy after droplet destroyed)
+droplet_backup_*/
