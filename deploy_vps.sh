@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# Start the DO droplet from the DO dashboard first
-# deploy_vps.sh — SSH into the DO droplet, start the trading session
-# (start_vps.sh), then start a second tmux session running Claude Code
-# with Remote Control enabled so it can be driven from the app.
+# deploy_vps.sh — power on the DO droplet, SSH in, start the trading
+# session (start_vps.sh), then start a second tmux session running
+# Claude Code with Remote Control enabled so it can be driven from the app.
 set -euo pipefail
 
-SSH_HOST="droplet"                 # see ~/.ssh/config: root@139.59.52.51:22022
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SSH_HOST="droplet"                 # see ~/.ssh/config
 REMOTE_DIR="~/git/trading/shoonya-auth"
 CLAUDE_SESSION="claude_remote"
 CLAUDE_RC_NAME="vps"               # name shown in Remote Control
 
+echo "🔌 Ensuring droplet is powered on..."
+"$SCRIPT_DIR/vps_power.sh" on
+
+echo ""
 echo "🚀 Starting trading session on $SSH_HOST..."
 ssh "$SSH_HOST" "cd $REMOTE_DIR && ./start_vps.sh"
 
