@@ -61,3 +61,6 @@ htmlcov/
 
 # Droplet sync/backup snapshots (see project memory: sole copy after droplet destroyed)
 droplet_backup_*/
+
+# Local-only deploy tooling (machine-specific ssh host aliases/paths, not shared)
+deploy_regimetrader.sh
