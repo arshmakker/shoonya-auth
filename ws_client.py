@@ -17,6 +17,16 @@ log = logging.getLogger("ws_client")
 
 WS_URL = "wss://api.shoonya.com/NorenWS/"
 RECONNECT_DELAY_SEC = 1.0
+HEALTHY_UPTIME_SEC = 120.0
+MAX_BACKOFF_SEC = 60.0
+
+
+def next_reconnect_delay(uptime_sec, prev_delay, base=RECONNECT_DELAY_SEC, cap=MAX_BACKOFF_SEC):
+    """After a short-lived connection, double the wait (gateway throttling);
+    a healthy long-lived connection resets the schedule to base."""
+    if uptime_sec >= HEALTHY_UPTIME_SEC:
+        return base
+    return min(prev_delay * 2, cap)
 
 
 class WsClient:
@@ -60,7 +70,9 @@ class WsClient:
                 pass
 
     def _run_loop(self):
+        delay = self._reconnect_delay
         while not self._stop_event.is_set():
+            started_at = time.monotonic()
             try:
                 self._ws = websocket.WebSocketApp(
                     WS_URL,
@@ -72,9 +84,13 @@ class WsClient:
                 self._ws.run_forever(ping_interval=3, ping_payload=json.dumps({"t": "h"}))
             except Exception as exc:
                 log.error("websocket loop error: %s", exc)
+            uptime = time.monotonic() - started_at
             if not self._stop_event.is_set():
-                log.warning("ws down — reconnecting in %ss", self._reconnect_delay)
-                time.sleep(self._reconnect_delay)
+                log.warning(
+                    "ws down after %.0fs — reconnecting in %.0fs", uptime, delay
+                )
+                self._stop_event.wait(delay)
+                delay = next_reconnect_delay(uptime, delay)
 
     def _on_open(self, ws):
         ws.send(json.dumps(self._handshake))

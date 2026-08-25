@@ -12,6 +12,7 @@ import json
 import pytest
 
 from ws_feed import WSFeedManager
+from ws_client import next_reconnect_delay
 
 
 class FakeTransport:
@@ -198,3 +199,18 @@ def test_status_when_acked_then_reports_health():
     assert s["connected"] is True
     assert s["cached_ticks"] == 1
     assert 0 <= s["last_msg_age_sec"] < 5
+
+
+# ── Reconnect backoff ────────────────────────────────────────────────────────
+
+def test_backoff_when_short_lived_connection_then_doubles():
+    assert next_reconnect_delay(uptime_sec=5, prev_delay=1.0) == 2.0
+    assert next_reconnect_delay(uptime_sec=5, prev_delay=2.0) == 4.0
+
+
+def test_backoff_when_capped_then_never_exceeds_60s():
+    assert next_reconnect_delay(uptime_sec=3, prev_delay=60.0) == 60.0
+
+
+def test_backoff_when_connection_was_healthy_then_resets_to_base():
+    assert next_reconnect_delay(uptime_sec=300, prev_delay=32.0) == 1.0
