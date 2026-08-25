@@ -130,6 +130,19 @@ def feed_status():
     return jsonify(status)
 
 
+@app.route("/tick/<key>", methods=["GET"])
+def tick(key):
+    if _feed is None:
+        return jsonify({"error": "feed disabled (SHOONYA_FEED_MODE=rest)"}), 409
+    exchange, _, token = key.partition("|")
+    if not exchange or not token:
+        return jsonify({"error": "key must be EXCHANGE|TOKEN"}), 400
+    quote = _feed.get_quote(exchange, token, max_age_sec=None)
+    if quote is None:
+        return jsonify({"error": "no tick cached"}), 404
+    return jsonify(quote)
+
+
 @app.route("/subscribe", methods=["POST"])
 def subscribe_instruments():
     data = request.get_json(force=True, silent=True) or {}
@@ -248,15 +261,14 @@ if __name__ == "__main__":
         if feed_mode == "shadow":
             # Observer-only: consumers keep REST; validator logs WS-vs-REST deltas.
             _cache_serving_enabled = False
-            shadow_specs = auto_subscribe or []
             interval = float(os.environ.get("SHOONYA_SHADOW_INTERVAL", "30").strip() or 30)
             threading.Thread(
                 target=run_shadow_loop,
-                args=(_api, _feed, shadow_specs, interval),
+                args=(_api, _feed, interval),
                 daemon=True,
                 name="ws-shadow-validator",
             ).start()
-            log.info("SHOONYA_FEED_MODE=shadow — validating %d instruments every %ss", len(shadow_specs), interval)
+            log.info("SHOONYA_FEED_MODE=shadow — validating subscribed instruments every %ss", interval)
         else:
             _cache_serving_enabled = True
 

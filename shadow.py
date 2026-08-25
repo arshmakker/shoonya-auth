@@ -73,12 +73,15 @@ class ShadowValidator:
         return results
 
 
-def run_shadow_loop(api, feed, instruments, interval_sec=30.0, stop_event=None):
-    """Blocking loop for a daemon thread; logs one comparison cycle per interval."""
+def run_shadow_loop(api, feed, interval_sec=30.0, stop_event=None):
+    """Blocking loop for a daemon thread; compares whatever the feed currently
+    has subscribed each cycle, so runtime /subscribe calls are covered too."""
     validator = ShadowValidator(api, feed)
     while True:
         try:
-            validator.run_cycle(instruments)
+            instruments = feed.status()["subscriptions"]
+            if instruments:
+                validator.run_cycle(instruments)
         except Exception as exc:
             log.error("SHADOW cycle failed: %s", exc, exc_info=True)
         if stop_event is not None:
