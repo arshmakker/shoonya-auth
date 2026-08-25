@@ -47,7 +47,9 @@ tmux new-session -d -s "$SESSION" -n "proxy" -x 220 -y 50
 tmux set-option -t "$SESSION" pane-border-status top
 tmux set-option -t "$SESSION" pane-border-format " #{pane_title} "
 
-tmux send-keys -t "$SESSION:proxy" "cd $DIR && ./venv/bin/python broker_proxy.py" Enter
+# TODO(ws-migration): pinned to shadow for a full-session validation; flip to
+# hybrid once a trading day finishes with clean 'match=N' SHADOW cycles.
+tmux send-keys -t "$SESSION:proxy" "cd $DIR && SHOONYA_FEED_MODE=shadow ./venv/bin/python broker_proxy.py" Enter
 tmux select-pane -t "$SESSION:proxy.0" -T "🔌 broker_proxy"
 
 # Wait up to 90s for proxy to be healthy

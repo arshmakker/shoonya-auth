@@ -17,6 +17,20 @@ log = logging.getLogger("ws_feed")
 
 _FEED_MESSAGE_TYPES = frozenset({"tk", "tf", "dk", "df"})
 _NEVER_RECEIVED_AGE_SEC = 1e9
+_VALID_MODES = frozenset({"rest", "shadow", "hybrid"})
+
+
+def normalize_mode(raw):
+    mode = str(raw or "").strip().lower()
+    return mode if mode in _VALID_MODES else "rest"
+
+
+def cache_serving_for(mode):
+    return normalize_mode(mode) == "hybrid"
+
+
+def validator_runs_for(mode):
+    return normalize_mode(mode) in ("shadow", "hybrid")
 
 
 def parse_instruments_spec(raw):

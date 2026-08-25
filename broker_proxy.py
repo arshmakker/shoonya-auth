@@ -30,7 +30,13 @@ sys.path.insert(0, os.path.dirname(__file__))
 from api_helper import ShoonyaApiPy
 from quote_bridge import CACHE_MISS, QUOTE_METHODS, serve_quote_from_cache
 from shadow import run_shadow_loop
-from ws_feed import WSFeedManager, parse_instruments_spec
+from ws_feed import (
+    WSFeedManager,
+    cache_serving_for,
+    normalize_mode,
+    parse_instruments_spec,
+    validator_runs_for,
+)
 
 log = logging.getLogger("broker_proxy")
 logging.basicConfig(
@@ -248,7 +254,7 @@ if __name__ == "__main__":
 
     _api, ws_access_token, ws_uid = _init_api(args.cred_file)
 
-    feed_mode = os.environ.get("SHOONYA_FEED_MODE", "hybrid").strip().lower()
+    feed_mode = normalize_mode(os.environ.get("SHOONYA_FEED_MODE", "hybrid"))
     if feed_mode == "rest":
         log.info("SHOONYA_FEED_MODE=rest — WebSocket feed disabled")
     else:
@@ -258,9 +264,8 @@ if __name__ == "__main__":
         if auto_subscribe:
             _feed.subscribe(auto_subscribe)
             log.info("Auto-subscribed %d instruments from SHOONYA_WS_SUBSCRIBE", len(auto_subscribe))
-        if feed_mode == "shadow":
-            # Observer-only: consumers keep REST; validator logs WS-vs-REST deltas.
-            _cache_serving_enabled = False
+        _cache_serving_enabled = cache_serving_for(feed_mode)
+        if validator_runs_for(feed_mode):
             interval = float(os.environ.get("SHOONYA_SHADOW_INTERVAL", "30").strip() or 30)
             threading.Thread(
                 target=run_shadow_loop,
@@ -268,9 +273,12 @@ if __name__ == "__main__":
                 daemon=True,
                 name="ws-shadow-validator",
             ).start()
-            log.info("SHOONYA_FEED_MODE=shadow — validating subscribed instruments every %ss", interval)
-        else:
-            _cache_serving_enabled = True
+            log.info(
+                "SHOONYA_FEED_MODE=%s — cache-serving=%s, validating subscribed instruments every %ss",
+                feed_mode,
+                _cache_serving_enabled,
+                interval,
+            )
 
     t = threading.Thread(target=_market_close_watchdog, daemon=True, name="market-close-watchdog")
     t.start()
