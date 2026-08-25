@@ -28,6 +28,9 @@ from flask import Flask, jsonify, request
 # Must run from shoonya-auth root (or sys.path must include it).
 sys.path.insert(0, os.path.dirname(__file__))
 from api_helper import ShoonyaApiPy
+from quote_bridge import CACHE_MISS, QUOTE_METHODS, serve_quote_from_cache
+from shadow import run_shadow_loop
+from ws_feed import WSFeedManager, parse_instruments_spec
 
 log = logging.getLogger("broker_proxy")
 logging.basicConfig(
@@ -39,6 +42,18 @@ _DEFAULT_CRED = os.path.expanduser("~/.shoonya/cred.yml")
 
 # Single shared instance — all routes use this. Never instantiate a second one.
 _api: ShoonyaApiPy | None = None
+
+# WebSocket feed manager (owns the SDK's single WS connection + tick cache).
+# None when SHOONYA_FEED_MODE=rest.
+_feed: WSFeedManager | None = None
+
+# Cache-first serving is only safe after shadow validation; shadow mode runs
+# the feed as observer while consumers keep getting REST quotes.
+_cache_serving_enabled = False
+
+# Quote reads served from the WS cache must be fresher than this, else fall
+# through to REST RPC.
+_QUOTE_CACHE_MAX_AGE_SEC = float(os.environ.get("SHOONYA_QUOTE_CACHE_MAX_AGE", "5").strip() or 5)
 
 app = Flask(__name__)
 
@@ -101,6 +116,32 @@ def health():
     return jsonify({"ok": ok})
 
 
+@app.route("/feed/status", methods=["GET"])
+def feed_status():
+    if _feed is None:
+        return jsonify({"enabled": False})
+    status = _feed.status()
+    status["enabled"] = True
+    return jsonify(status)
+
+
+@app.route("/subscribe", methods=["POST"])
+def subscribe_instruments():
+    data = request.get_json(force=True, silent=True) or {}
+    instruments = data.get("instruments")
+    action = data.get("action", "subscribe")
+    if not isinstance(instruments, list) or not instruments or \
+            not all(isinstance(i, str) and "|" in i for i in instruments):
+        return jsonify({"error": "'instruments' must be a non-empty list of 'EXCHANGE|TOKEN' strings"}), 400
+    if _feed is None:
+        return jsonify({"error": "feed disabled (SHOONYA_FEED_MODE=rest)"}), 409
+    if action == "unsubscribe":
+        _feed.unsubscribe(instruments)
+    else:
+        _feed.subscribe(instruments)
+    return jsonify({"ok": True, "subscriptions": _feed.status()["subscriptions"]})
+
+
 @app.route("/call", methods=["POST"])
 def call_method():
     data = request.get_json(force=True, silent=True) or {}
@@ -114,6 +155,14 @@ def call_method():
     method = getattr(_api, method_name, None)
     if method is None:
         return jsonify({"error": f"unknown method: {method_name}"}), 400
+
+    # Cache-first for quote reads: fresh WS tick beats a REST round-trip.
+    if _cache_serving_enabled and _feed is not None and method_name in QUOTE_METHODS:
+        cached = serve_quote_from_cache(
+            _feed, method_name, args, kwargs, max_age_sec=_QUOTE_CACHE_MAX_AGE_SEC
+        )
+        if cached is not CACHE_MISS:
+            return jsonify(cached), 200
 
     try:
         result = method(*args, **kwargs)
@@ -180,6 +229,31 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     _api = _init_api(args.cred_file)
+
+    feed_mode = os.environ.get("SHOONYA_FEED_MODE", "hybrid").strip().lower()
+    if feed_mode == "rest":
+        log.info("SHOONYA_FEED_MODE=rest — WebSocket feed disabled")
+    else:
+        _feed = WSFeedManager(_api)
+        _feed.start()
+        auto_subscribe = parse_instruments_spec(os.environ.get("SHOONYA_WS_SUBSCRIBE", ""))
+        if auto_subscribe:
+            _feed.subscribe(auto_subscribe)
+            log.info("Auto-subscribed %d instruments from SHOONYA_WS_SUBSCRIBE", len(auto_subscribe))
+        if feed_mode == "shadow":
+            # Observer-only: consumers keep REST; validator logs WS-vs-REST deltas.
+            _cache_serving_enabled = False
+            shadow_specs = auto_subscribe or []
+            interval = float(os.environ.get("SHOONYA_SHADOW_INTERVAL", "30").strip() or 30)
+            threading.Thread(
+                target=run_shadow_loop,
+                args=(_api, _feed, shadow_specs, interval),
+                daemon=True,
+                name="ws-shadow-validator",
+            ).start()
+            log.info("SHOONYA_FEED_MODE=shadow — validating %d instruments every %ss", len(shadow_specs), interval)
+        else:
+            _cache_serving_enabled = True
 
     t = threading.Thread(target=_market_close_watchdog, daemon=True, name="market-close-watchdog")
     t.start()
