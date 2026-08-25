@@ -79,6 +79,10 @@ def _init_api(cred_file: str) -> ShoonyaApiPy:
         api.inject_oauth_header(access_token, uid, account_id)
         api._NorenApi__username = uid
         api._NorenApi__accountid = account_id
+        # inject_oauth_header sets REST headers only — the WS handshake reads
+        # __access_token, without which the broker silently drops the 'a' auth
+        # message and the feed never acks.
+        api.set_credentials(access_token, uid, account_id)
         if api.validate_oauth_session():
             log.info("Proxy ready — session valid uid=%s cred=%s", uid, cred_file)
             return api
@@ -88,6 +92,7 @@ def _init_api(cred_file: str) -> ShoonyaApiPy:
 
     # Auto-login path: calls _save_creds internally on success.
     _initialize_api_oauth(api, creds, log, cred_path=cred_file)
+    api.set_credentials(str(creds.get("Access_token") or "").strip(), uid, account_id)
     log.info("Proxy ready — session valid after re-auth uid=%s cred=%s", uid, cred_file)
     return api
 
