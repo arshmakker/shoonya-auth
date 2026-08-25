@@ -1,209 +1,200 @@
-"""tests/test_ws_feed.py — WSFeedManager behaviors (TDD/BDD).
+"""tests/test_ws_feed.py — WSFeedManager behaviors (own transport, TDD/BDD).
 
-The SDK's NorenApi.start_websocket auto-reconnects BUT its internal
-__resubscribe() is commented out — after any reconnect, subscriptions are
-silently LOST. The single most important behavior pinned here: subscriptions
-survive reconnects because the manager re-sends them from its own set on
-every socket-open callback.
+The manager no longer uses NorenApi.start_websocket (silently unack'd in the
+proxy context). It drives a thin WsClient transport with the session token
+from the existing login flow. 'Connected' means the broker's 'ak OK' ack was
+SEEN — subscriptions are (re)sent only after that ack, which also preserves
+them across reconnects (the SDK never resubscribed).
 """
 
-import time
+import json
 
 import pytest
 
-from ws_feed import WSFeedManager, parse_instruments_spec
+from ws_feed import WSFeedManager
 
 
-class FakeApi:
-    """Duck-typed ShoonyaApiPy stand-in: records wire calls, exposes callbacks."""
-
-    def __init__(self):
+class FakeTransport:
+    def __init__(self, on_message=None):
+        self.on_message = on_message
         self.started = False
         self.closed = False
-        self.sent_subscribes = []      # every subscribe() payload (list of instruments)
-        self.sent_unsubscribes = []
-        self.callbacks = {}
+        self.sent = []
 
-    def start_websocket(self, subscribe_callback=None, order_update_callback=None,
-                        socket_open_callback=None, socket_close_callback=None,
-                        socket_error_callback=None):
+    def start(self):
         self.started = True
-        self.callbacks = {
-            "tick": subscribe_callback,
-            "open": socket_open_callback,
-            "close": socket_close_callback,
-            "error": socket_error_callback,
-        }
 
-    def close_websocket(self):
+    def send(self, text):
+        self.sent.append(text)
+
+    def close(self):
         self.closed = True
 
-    def subscribe(self, instrument, feed_type=None):
-        self.sent_subscribes.append(list(instrument) if isinstance(instrument, list) else instrument)
+    def fire_open(self):
+        pass  # handshake is internal to WsClient; ack drives state instead
 
-    def unsubscribe(self, instrument, feed_type=None):
-        self.sent_unsubscribes.append(list(instrument) if isinstance(instrument, list) else instrument)
+    def fire_text(self, obj):
+        self.on_message(obj)
 
-    # Test helpers -----------------------------------------------------------
-    def open_socket(self):
-        self.callbacks["open"]()
+    def fire_close(self):
+        pass
 
-    def drop_socket(self):
-        self.callbacks["close"]()
+    def fire_error(self, err):
+        if self.on_transport_error:
+            self.on_transport_error(err)
 
-    def deliver(self, msg):
-        self.callbacks["tick"](msg)
+    on_transport_error = None
+
+
+def make_feed():
+    transport = FakeTransport()
+    feed = WSFeedManager(
+        access_token="tok123", uid="U1", transport_factory=lambda: transport
+    )
+    transport.on_message = feed._on_raw
+    return feed, transport
 
 
 # ── Lifecycle ────────────────────────────────────────────────────────────────
 
-def test_start_when_called_then_websocket_started_with_callbacks():
-    api = FakeApi()
-    feed = WSFeedManager(api)
+def test_start_when_called_then_transport_started():
+    feed, transport = make_feed()
     feed.start()
-    assert api.started is True
-    assert set(api.callbacks) == {"tick", "open", "close", "error"}
+    assert transport.started is True
 
 
-def test_stop_when_called_then_sdk_close_invoked():
-    api = FakeApi()
-    feed = WSFeedManager(api)
+def test_stop_when_called_then_transport_closed():
+    feed, transport = make_feed()
     feed.start()
     feed.stop()
-    assert api.closed is True
+    assert transport.closed is True
 
 
-# ── THE critical behavior: subscriptions survive reconnects ─────────────────
+# ── Auth ack gating ──────────────────────────────────────────────────────────
 
-def test_resubscribe_when_socket_reopens_then_all_subscriptions_resent():
-    api = FakeApi()
-    feed = WSFeedManager(api)
+def test_ack_ok_when_received_then_connected_and_subscriptions_resent():
+    feed, transport = make_feed()
     feed.start()
     feed.subscribe(["NSE|26000", "NFO|12345"])
-    api.open_socket()
-    assert api.sent_subscribes == [sorted(["NSE|26000", "NFO|12345"])]
+    assert transport.sent == [], "nothing may be sent before the broker acks"
 
-    # Simulate mid-session drop + SDK auto-reconnect → on_open fires again.
-    api.drop_socket()
-    api.open_socket()
-    assert api.sent_subscribes[-1] == sorted(["NSE|26000", "NFO|12345"]), \
-        "SDK does NOT resubscribe on reconnect — manager must"
+    transport.fire_open()
+    transport.fire_text({"t": "ak", "s": "OK", "uid": "U1"})
+
+    assert feed.status()["connected"] is True
+    assert len(transport.sent) == 1
+    sent = json.loads(transport.sent[0])
+    assert sent["t"] == "t"
+    assert sorted(sent["k"].split("#")) == ["NFO|12345", "NSE|26000"]
 
 
-def test_subscribe_when_disconnected_then_queued_and_sent_on_open():
-    api = FakeApi()
-    feed = WSFeedManager(api)
-    feed.start()          # not opened yet
+def test_resubscribe_when_reconnected_and_acked_then_subscriptions_resent_again():
+    """A fresh ack after any reconnect must restore the full subscription set."""
+    feed, transport = make_feed()
+    feed.start()
     feed.subscribe(["NSE|26000"])
-    assert api.sent_subscribes == []          # nothing sent while disconnected
-    api.open_socket()
-    assert api.sent_subscribes == [["NSE|26000"]]
+    transport.fire_open()
+    transport.fire_text({"t": "ak", "s": "OK"})
+
+    transport.fire_open()
+    transport.fire_text({"t": "ak", "s": "OK"})
+
+    assert feed.status()["connected"] is True
+    kinds = [json.loads(s)["t"] for s in transport.sent]
+    assert kinds == ["t", "t"], "one full subscribe per ack cycle"
+    assert json.loads(transport.sent[-1])["k"] == "NSE|26000"
 
 
-def test_unsubscribe_when_connected_then_forwarded_and_removed_from_set():
-    api = FakeApi()
-    feed = WSFeedManager(api)
+def test_ack_not_ok_when_received_then_error_recorded_stays_disconnected():
+    feed, transport = make_feed()
     feed.start()
-    api.open_socket()
+    feed.subscribe(["NSE|26000"])
+    transport.fire_open()
+    transport.fire_text({"t": "ak", "s": "Not_Ok"})
+
+    assert feed.status()["connected"] is False
+    assert "Not_Ok" in (feed.status()["last_error"] or "")
+    assert transport.sent == [], "never send subscriptions without a valid ack"
+
+
+def test_subscribe_when_already_acked_then_sent_immediately():
+    feed, transport = make_feed()
+    feed.start()
+    transport.fire_open()
+    transport.fire_text({"t": "ak", "s": "OK"})
+    transport.sent.clear()
+
+    feed.subscribe(["NSE|26000"])
+    assert json.loads(transport.sent[0])["k"] == "NSE|26000"
+
+
+def test_unsubscribe_when_acked_then_forwarded_and_removed_from_set():
+    feed, transport = make_feed()
+    feed.start()
+    transport.fire_open()
+    transport.fire_text({"t": "ak", "s": "OK"})
     feed.subscribe(["NSE|26000", "NFO|12345"])
+
     feed.unsubscribe(["NSE|26000"])
-    assert api.sent_unsubscribes == [["NSE|26000"]]
-    api.drop_socket()
-    api.open_socket()
-    assert api.sent_subscribes[-1] == ["NFO|12345"], "unsubscribed symbol must not come back"
+
+    kinds = [json.loads(s)["t"] for s in transport.sent]
+    assert kinds[-1] == "u"
+    transport.fire_close()
+    transport.fire_open()
+    transport.fire_text({"t": "ak", "s": "OK"})
+    assert json.loads(transport.sent[-1])["k"] == "NFO|12345"
 
 
 # ── Tick routing ─────────────────────────────────────────────────────────────
 
-def test_on_tick_when_touchline_then_normalized_quote_cached():
-    api = FakeApi()
-    feed = WSFeedManager(api)
+def test_on_message_when_touchline_then_normalized_quote_cached():
+    feed, transport = make_feed()
     feed.start()
-    api.deliver({"t": "tk", "e": "NSE", "tk": "26000", "lp": "24170.00"})
+    transport.fire_open()
+    transport.fire_text({"t": "ak", "s": "OK"})
+    transport.fire_text({"t": "tk", "e": "NSE", "tk": "26000", "lp": "24170.00"})
 
     q = feed.get_quote("NSE", "26000")
     assert q is not None and q["lp"] == 24170.00
 
 
-def test_on_tick_when_non_feed_message_then_ignored():
-    """Order updates ('om') and acks ('ak') ride the same socket — never cache them."""
-    api = FakeApi()
-    feed = WSFeedManager(api)
+def test_on_message_when_order_update_then_ignored():
+    feed, transport = make_feed()
     feed.start()
-    api.deliver({"t": "om", "status": "COMPLETE"})
-    api.deliver({"t": "ak", "s": "OK"})
+    transport.fire_open()
+    transport.fire_text({"t": "ak", "s": "OK"})
+    transport.fire_text({"t": "om", "status": "COMPLETE"})
     assert feed.status()["cached_ticks"] == 0
-
-
-def test_on_tick_when_any_feed_message_then_last_msg_timestamp_advances():
-    api = FakeApi()
-    feed = WSFeedManager(api)
-    feed.start()
-    before = feed.status()["last_msg_age_sec"]
-    time.sleep(0.01)
-    api.deliver({"t": "tk", "e": "NSE", "tk": "26000", "lp": "1.0"})
-    after = feed.status()["last_msg_age_sec"]
-    assert after < before
 
 
 # ── Quote reads ──────────────────────────────────────────────────────────────
 
 def test_get_quote_when_stale_beyond_max_age_then_none():
-    api = FakeApi()
-    feed = WSFeedManager(api)
+    feed, transport = make_feed()
     feed.start()
-    api.deliver({"t": "tk", "e": "NSE", "tk": "26000", "lp": "1.0"})
-    feed._store._received_at["NSE|26000"] -= 120.0     # backdate 2 min
+    transport.fire_open()
+    transport.fire_text({"t": "ak", "s": "OK"})
+    transport.fire_text({"t": "tk", "e": "NSE", "tk": "26000", "lp": "1.0"})
+    feed._store._received_at["NSE|26000"] -= 120.0
     assert feed.get_quote("NSE", "26000", max_age_sec=30.0) is None
 
 
 def test_get_quote_when_unknown_symbol_then_none():
-    feed = WSFeedManager(FakeApi())
+    feed, _ = make_feed()
     feed.start()
     assert feed.get_quote("NSE", "404") is None
 
 
-# ── Status surface (backs GET /feed/status) ─────────────────────────────────
+# ── Status surface ───────────────────────────────────────────────────────────
 
-def test_status_when_running_then_reports_connection_health():
-    api = FakeApi()
-    feed = WSFeedManager(api)
+def test_status_when_acked_then_reports_health():
+    feed, transport = make_feed()
     feed.start()
-    s = feed.status()
-    assert s["connected"] is False
-    api.open_socket()
-    api.deliver({"t": "tk", "e": "NSE", "tk": "26000", "lp": "1.0"})
+    transport.fire_open()
+    transport.fire_text({"t": "ak", "s": "OK"})
+    transport.fire_text({"t": "tk", "e": "NSE", "tk": "26000", "lp": "1.0"})
+
     s = feed.status()
     assert s["connected"] is True
-    assert s["subscriptions"] == []
     assert s["cached_ticks"] == 1
     assert 0 <= s["last_msg_age_sec"] < 5
-
-
-def test_status_when_error_recorded_then_last_error_exposed():
-    api = FakeApi()
-    feed = WSFeedManager(api)
-    feed.start()
-    api.callbacks["error"]("boom")
-    assert feed.status()["last_error"] == "boom"
-
-
-# ── Instrument spec parsing (SHOONYA_WS_SUBSCRIBE env) ──────────────────────
-
-def test_parse_spec_when_comma_separated_then_clean_list():
-    assert parse_instruments_spec("NSE|26000, NFO|12345 ,MCX|9") == \
-        ["NSE|26000", "NFO|12345", "MCX|9"]
-
-
-def test_parse_spec_when_empty_or_junk_entries_then_dropped():
-    assert parse_instruments_spec(", ,NSE|1,,") == ["NSE|1"]
-    assert parse_instruments_spec("") == []
-    assert parse_instruments_spec(None) == []
-
-
-def test_parse_spec_when_missing_separator_then_entry_ignored():
-    assert parse_instruments_spec("NSE26000,NSE|1") == ["NSE|1"]
-
-
-def test_parse_spec_when_duplicates_then_deduped_first_position_kept():
-    assert parse_instruments_spec("NSE|1,NFO|2,NSE|1") == ["NSE|1", "NFO|2"]

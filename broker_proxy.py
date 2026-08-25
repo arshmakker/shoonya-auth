@@ -85,7 +85,7 @@ def _init_api(cred_file: str) -> ShoonyaApiPy:
         api.set_credentials(access_token, uid, account_id)
         if api.validate_oauth_session():
             log.info("Proxy ready — session valid uid=%s cred=%s", uid, cred_file)
-            return api
+            return api, access_token, uid
         log.warning("Access_token from %s is stale — attempting OAuth login...", cred_file)
     else:
         log.warning("No Access_token in %s — attempting OAuth login...", cred_file)
@@ -94,7 +94,7 @@ def _init_api(cred_file: str) -> ShoonyaApiPy:
     _initialize_api_oauth(api, creds, log, cred_path=cred_file)
     api.set_credentials(str(creds.get("Access_token") or "").strip(), uid, account_id)
     log.info("Proxy ready — session valid after re-auth uid=%s cred=%s", uid, cred_file)
-    return api
+    return api, str(creds.get("Access_token") or "").strip(), uid
 
 
 def _raw_position_book(api: ShoonyaApiPy) -> dict:
@@ -233,13 +233,13 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    _api = _init_api(args.cred_file)
+    _api, ws_access_token, ws_uid = _init_api(args.cred_file)
 
     feed_mode = os.environ.get("SHOONYA_FEED_MODE", "hybrid").strip().lower()
     if feed_mode == "rest":
         log.info("SHOONYA_FEED_MODE=rest — WebSocket feed disabled")
     else:
-        _feed = WSFeedManager(_api)
+        _feed = WSFeedManager(access_token=ws_access_token, uid=ws_uid)
         _feed.start()
         auto_subscribe = parse_instruments_spec(os.environ.get("SHOONYA_WS_SUBSCRIBE", ""))
         if auto_subscribe:
