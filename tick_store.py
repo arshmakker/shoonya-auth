@@ -48,7 +48,11 @@ class TickStore:
 
     def update(self, key, fields):
         with self._lock:
-            self._ticks[key] = dict(fields)
+            existing = self._ticks.get(key)
+            if existing is not None:
+                existing.update(fields)
+            else:
+                self._ticks[key] = dict(fields)
             self._received_at[key] = time.monotonic()
 
     def get(self, key, max_age_sec=None):

@@ -89,6 +89,25 @@ def test_update_when_same_key_twice_then_latest_wins():
     assert store.get("NSE|1")["lp"] == 11.5
 
 
+def test_update_when_partial_delta_then_merged_not_replaced():
+    """Noren 'tf' updates carry ONLY changed fields — a book-only delta must
+    not wipe lp/oi from the previously cached full touchline."""
+    store = TickStore()
+    store.update("NSE|1", {"lp": 32.65, "bp1": 32.55, "sp1": 32.75, "oi": 447460})
+    store.update("NSE|1", {"bp1": 32.50, "bq1": 65})          # tf delta: no lp
+    q = store.get("NSE|1")
+    assert q["lp"] == 32.65, "delta must not erase last price"
+    assert q["oi"] == 447460
+    assert q["bp1"] == 32.50, "delta field must overwrite"
+    assert q["sp1"] == 32.75
+
+
+def test_update_when_delta_for_unknown_key_then_stored_as_is():
+    store = TickStore()
+    store.update("NSE|9", {"bp1": 1.0})
+    assert store.get("NSE|9") == {"bp1": 1.0}
+
+
 def test_keys_when_mixed_updates_then_all_instrument_keys_listed():
     store = TickStore()
     store.update("NSE|1", {"lp": 1})
