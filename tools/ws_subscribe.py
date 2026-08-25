@@ -31,7 +31,11 @@ def main():
         if "|" in arg:
             specs.append(arg)
             continue
-        res = post("/call", {"method": "searchscrip", "args": ["NFO", arg]})
+        try:
+            res = post("/call", {"method": "searchscrip", "args": ["NFO", arg]}) or {}
+        except Exception as exc:
+            print(f"{arg}: resolve failed ({exc})")
+            continue
         vals = res.get("values") or []
         if not vals:
             print(f"{arg}: NOT RESOLVED")
