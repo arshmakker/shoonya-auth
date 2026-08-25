@@ -65,6 +65,24 @@ def test_compare_when_feed_has_no_tick_then_ws_missing():
     assert out["rest_lp"] == 10.0
 
 
+def test_compare_when_tick_stale_but_present_then_still_compared():
+    """Value comparison must ignore cache freshness — quiet far strikes tick
+    rarely, and 'stale' does not mean wrong."""
+    class AgeRecordingFeed(FakeFeed):
+        def __init__(self, ticks):
+            super().__init__(ticks)
+            self.ages = []
+
+        def get_quote(self, exchange, token, max_age_sec=None):
+            self.ages.append(max_age_sec)
+            return super().get_quote(exchange, token, max_age_sec=max_age_sec)
+
+    feed = AgeRecordingFeed({"NSE|1": {"lp": 10.0}})
+    out = ShadowValidator(FakeApi({("NSE", "1"): {"lp": "10.0"}}), feed).compare("NSE", "1")
+    assert out["verdict"] == "match"
+    assert feed.ages == [float("inf")]
+
+
 def test_compare_when_rest_returns_none_then_rest_unavailable():
     out = ShadowValidator(FakeApi(), FakeFeed({"NSE|1": {"lp": 10.0}})).compare("NSE", "1")
     assert out["verdict"] == "rest_unavailable"

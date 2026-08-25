@@ -33,7 +33,7 @@ class ShadowValidator:
         if rest_lp is None:
             return {"key": key, "verdict": "rest_unavailable"}
 
-        ws_quote = self._feed.get_quote(exchange, token)
+        ws_quote = self._feed.get_quote(exchange, token, max_age_sec=float("inf"))
         if not isinstance(ws_quote, dict) or "lp" not in ws_quote:
             return {"key": key, "verdict": "ws_missing", "rest_lp": rest_lp}
         ws_lp = float(ws_quote["lp"])

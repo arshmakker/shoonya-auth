@@ -137,7 +137,7 @@ def tick(key):
     exchange, _, token = key.partition("|")
     if not exchange or not token:
         return jsonify({"error": "key must be EXCHANGE|TOKEN"}), 400
-    quote = _feed.get_quote(exchange, token, max_age_sec=None)
+    quote = _feed.get_quote(exchange, token, max_age_sec=float("inf"))
     if quote is None:
         return jsonify({"error": "no tick cached"}), 404
     return jsonify(quote)
