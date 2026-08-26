@@ -11,22 +11,15 @@ Run AFTER broker_proxy is healthy (start_vps.sh backgrounds this):
 """
 
 import argparse
-import json
 import sys
-import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
-PROXY = "http://127.0.0.1:7890"
+from proxy_client import post, resolve
+
+_RESOLVE_WORKERS = 16
+
 INDEX_SPEC = "NSE|26000"
-
-
-def post(path, payload, timeout=15):
-    req = urllib.request.Request(
-        PROXY + path,
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
-    )
-    return json.loads(urllib.request.urlopen(req, timeout=timeout).read())
 
 
 def next_weekly_expiry(today):
@@ -52,12 +45,6 @@ def nifty_chain_symbols(expiry, spot, width=800, step=50):
         out.append(f"NIFTY{tag}C{strike}")
         out.append(f"NIFTY{tag}P{strike}")
     return out
-
-
-def resolve(symbol):
-    res = post("/call", {"method": "searchscrip", "args": ["NFO", symbol]}) or {}
-    vals = res.get("values") or []
-    return f"NFO|{vals[0]['token']}" if vals else None
 
 
 def fetch_spot():
@@ -88,12 +75,15 @@ def main():
 
     specs = [INDEX_SPEC]
     missing = []
-    for sym in symbols:
-        spec = resolve(sym)
-        if spec:
-            specs.append(spec)
-        else:
-            missing.append(sym)
+    # Resolutions are independent /call round-trips to the local proxy — fan
+    # them out instead of paying (network latency x len(symbols)) serially
+    # at boot, while this backgrounds ahead of the first strategy call.
+    with ThreadPoolExecutor(max_workers=_RESOLVE_WORKERS) as pool:
+        for sym, spec in zip(symbols, pool.map(resolve, symbols)):
+            if spec:
+                specs.append(spec)
+            else:
+                missing.append(sym)
 
     print(f"resolved {len(specs) - 1}/{len(symbols)}; subscribing {len(specs)} total")
     result = post("/subscribe", {"instruments": specs})

@@ -123,6 +123,9 @@ class WSFeedManager:
             return
         if t in _FEED_MESSAGE_TYPES:
             key, quote = self._store.normalize_touchline(msg)
-            if key != "|":
+            # Skip only when BOTH exchange and token are absent — matches the
+            # "|"-sentinel check this replaces exactly (a key with just one
+            # side present, e.g. "NFO|", still updates as it did before).
+            if msg.get("e") or msg.get("tk"):
                 self._store.update(key, quote)
             self._last_msg_monotonic = time.monotonic()

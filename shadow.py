@@ -7,8 +7,11 @@ this gate decides when cache-first serving is safe to enable.
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 log = logging.getLogger("shadow")
+
+_COMPARE_WORKERS = 8
 
 
 class ShadowValidator:
@@ -52,10 +55,14 @@ class ShadowValidator:
         }
 
     def run_cycle(self, instruments):
-        results = []
-        for spec in instruments:
-            exchange, _, token = str(spec).partition("|")
-            results.append(self.compare(exchange, token))
+        specs = [str(spec).partition("|") for spec in instruments]
+        # Each compare() is an independent blocking REST round-trip; run them
+        # concurrently (the broker's per-process rate limiter already
+        # serializes/paces the actual quote calls) instead of one at a time,
+        # which at wide-net subscription counts (100+) made a single cycle
+        # take longer than the configured interval.
+        with ThreadPoolExecutor(max_workers=_COMPARE_WORKERS) as pool:
+            results = list(pool.map(lambda s: self.compare(s[0], s[2]), specs))
 
         counts = {}
         for r in results:

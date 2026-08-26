@@ -9,20 +9,9 @@ resolved on NFO via /call searchscrip. Avoids embedding '|' in shell/tmux
 command lines entirely.
 """
 
-import json
 import sys
-import urllib.request
 
-PROXY = "http://127.0.0.1:7890"
-
-
-def post(path, payload):
-    req = urllib.request.Request(
-        PROXY + path,
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
-    )
-    return json.loads(urllib.request.urlopen(req, timeout=15).read())
+from proxy_client import post, resolve
 
 
 def main():
@@ -32,16 +21,15 @@ def main():
             specs.append(arg)
             continue
         try:
-            res = post("/call", {"method": "searchscrip", "args": ["NFO", arg]}) or {}
+            spec = resolve(arg)
         except Exception as exc:
             print(f"{arg}: resolve failed ({exc})")
             continue
-        vals = res.get("values") or []
-        if not vals:
+        if not spec:
             print(f"{arg}: NOT RESOLVED")
             continue
-        specs.append(f"NFO|{vals[0]['token']}")
-        print(f"{arg} -> NFO|{vals[0]['token']}")
+        specs.append(spec)
+        print(f"{arg} -> {spec}")
     if not specs:
         print("nothing to subscribe")
         return

@@ -10,8 +10,17 @@ import time
 # which is what day classification needs (2026-08-26). 'h'/'l'/'c' stay out
 # until something needs them — and note Noren's 'c' is the PREVIOUS close, not
 # today's, so it is not a drop-in for a close price.
-_FLOAT_FIELDS = ("lp", "bp1", "sp1", "pc", "o")
-_INT_FIELDS = ("bq1", "sq1", "oi", "v")
+_NUMERIC_FIELDS = {
+    "lp": float,
+    "bp1": float,
+    "sp1": float,
+    "pc": float,
+    "o": float,
+    "bq1": int,
+    "sq1": int,
+    "oi": int,
+    "v": int,
+}
 _PASSTHROUGH_FIELDS = ("ts", "e", "tk")
 
 
@@ -32,18 +41,11 @@ class TickStore:
         key = f"{exchange}|{token}"
 
         quote = {}
-        for field in _FLOAT_FIELDS:
+        for field, cast in _NUMERIC_FIELDS.items():
             value = msg.get(field)
             if value not in (None, ""):
                 try:
-                    quote[field] = float(value)
-                except (TypeError, ValueError):
-                    pass
-        for field in _INT_FIELDS:
-            value = msg.get(field)
-            if value not in (None, ""):
-                try:
-                    quote[field] = int(float(value))
+                    quote[field] = cast(float(value))
                 except (TypeError, ValueError):
                     pass
         for field in _PASSTHROUGH_FIELDS:
