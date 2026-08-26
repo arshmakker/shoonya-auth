@@ -47,7 +47,9 @@ tmux new-session -d -s "$SESSION" -n "proxy" -x 220 -y 50
 tmux set-option -t "$SESSION" pane-border-status top
 tmux set-option -t "$SESSION" pane-border-format " #{pane_title} "
 
-tmux send-keys -t "$SESSION:proxy" "cd $DIR && ./venv/bin/python broker_proxy.py" Enter
+# WS feed: hybrid mode — fresh cached ticks served to consumers, REST fallback.
+# Flip back to SHOONYA_FEED_MODE=shadow if validation ever needs re-running.
+tmux send-keys -t "$SESSION:proxy" "cd $DIR && SHOONYA_FEED_MODE=hybrid ./venv/bin/python broker_proxy.py" Enter
 tmux select-pane -t "$SESSION:proxy.0" -T "🔌 broker_proxy"
 
 # Wait up to 90s for proxy to be healthy
@@ -73,6 +75,11 @@ for i in $(seq 1 90); do
         exit 1
     fi
 done
+
+# Wide-net WS subscription: NIFTY index + full weekly strike chain around
+# live spot (CE+PE). Backgrounded so session start never blocks on it; log
+# lands in ws_chain_subscribe.log for post-boot inspection.
+nohup bash -c "sleep 25 && cd '$DIR' && ./venv/bin/python tools/ws_subscribe_chain.py" > "$DIR/ws_chain_subscribe.log" 2>&1 &
 
 # Split proxy window: pane 0 (left) broker_proxy, pane 1 (right) regimetrader
 #

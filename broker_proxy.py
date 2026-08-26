@@ -28,6 +28,15 @@ from flask import Flask, jsonify, request
 # Must run from shoonya-auth root (or sys.path must include it).
 sys.path.insert(0, os.path.dirname(__file__))
 from api_helper import ShoonyaApiPy
+from quote_bridge import CACHE_MISS, QUOTE_METHODS, serve_quote_from_cache
+from shadow import run_shadow_loop
+from ws_feed import (
+    WSFeedManager,
+    cache_serving_for,
+    normalize_mode,
+    parse_instruments_spec,
+    validator_runs_for,
+)
 
 log = logging.getLogger("broker_proxy")
 logging.basicConfig(
@@ -39,6 +48,18 @@ _DEFAULT_CRED = os.path.expanduser("~/.shoonya/cred.yml")
 
 # Single shared instance — all routes use this. Never instantiate a second one.
 _api: ShoonyaApiPy | None = None
+
+# WebSocket feed manager (owns the SDK's single WS connection + tick cache).
+# None when SHOONYA_FEED_MODE=rest.
+_feed: WSFeedManager | None = None
+
+# Cache-first serving is only safe after shadow validation; shadow mode runs
+# the feed as observer while consumers keep getting REST quotes.
+_cache_serving_enabled = False
+
+# Quote reads served from the WS cache must be fresher than this, else fall
+# through to REST RPC.
+_QUOTE_CACHE_MAX_AGE_SEC = float(os.environ.get("SHOONYA_QUOTE_CACHE_MAX_AGE", "5").strip() or 5)
 
 app = Flask(__name__)
 
@@ -64,17 +85,22 @@ def _init_api(cred_file: str) -> ShoonyaApiPy:
         api.inject_oauth_header(access_token, uid, account_id)
         api._NorenApi__username = uid
         api._NorenApi__accountid = account_id
+        # inject_oauth_header sets REST headers only — the WS handshake reads
+        # __access_token, without which the broker silently drops the 'a' auth
+        # message and the feed never acks.
+        api.set_credentials(access_token, uid, account_id)
         if api.validate_oauth_session():
             log.info("Proxy ready — session valid uid=%s cred=%s", uid, cred_file)
-            return api
+            return api, access_token, uid
         log.warning("Access_token from %s is stale — attempting OAuth login...", cred_file)
     else:
         log.warning("No Access_token in %s — attempting OAuth login...", cred_file)
 
     # Auto-login path: calls _save_creds internally on success.
     _initialize_api_oauth(api, creds, log, cred_path=cred_file)
+    api.set_credentials(str(creds.get("Access_token") or "").strip(), uid, account_id)
     log.info("Proxy ready — session valid after re-auth uid=%s cred=%s", uid, cred_file)
-    return api
+    return api, str(creds.get("Access_token") or "").strip(), uid
 
 
 def _raw_position_book(api: ShoonyaApiPy) -> dict:
@@ -101,6 +127,45 @@ def health():
     return jsonify({"ok": ok})
 
 
+@app.route("/feed/status", methods=["GET"])
+def feed_status():
+    if _feed is None:
+        return jsonify({"enabled": False})
+    status = _feed.status()
+    status["enabled"] = True
+    return jsonify(status)
+
+
+@app.route("/tick/<key>", methods=["GET"])
+def tick(key):
+    if _feed is None:
+        return jsonify({"error": "feed disabled (SHOONYA_FEED_MODE=rest)"}), 409
+    exchange, _, token = key.partition("|")
+    if not exchange or not token:
+        return jsonify({"error": "key must be EXCHANGE|TOKEN"}), 400
+    quote = _feed.get_quote(exchange, token, max_age_sec=float("inf"))
+    if quote is None:
+        return jsonify({"error": "no tick cached"}), 404
+    return jsonify(quote)
+
+
+@app.route("/subscribe", methods=["POST"])
+def subscribe_instruments():
+    data = request.get_json(force=True, silent=True) or {}
+    instruments = data.get("instruments")
+    action = data.get("action", "subscribe")
+    if not isinstance(instruments, list) or not instruments or \
+            not all(isinstance(i, str) and "|" in i for i in instruments):
+        return jsonify({"error": "'instruments' must be a non-empty list of 'EXCHANGE|TOKEN' strings"}), 400
+    if _feed is None:
+        return jsonify({"error": "feed disabled (SHOONYA_FEED_MODE=rest)"}), 409
+    if action == "unsubscribe":
+        _feed.unsubscribe(instruments)
+    else:
+        _feed.subscribe(instruments)
+    return jsonify({"ok": True, "subscriptions": _feed.status()["subscriptions"]})
+
+
 @app.route("/call", methods=["POST"])
 def call_method():
     data = request.get_json(force=True, silent=True) or {}
@@ -114,6 +179,14 @@ def call_method():
     method = getattr(_api, method_name, None)
     if method is None:
         return jsonify({"error": f"unknown method: {method_name}"}), 400
+
+    # Cache-first for quote reads: fresh WS tick beats a REST round-trip.
+    if _cache_serving_enabled and _feed is not None and method_name in QUOTE_METHODS:
+        cached = serve_quote_from_cache(
+            _feed, method_name, args, kwargs, max_age_sec=_QUOTE_CACHE_MAX_AGE_SEC
+        )
+        if cached is not CACHE_MISS:
+            return jsonify(cached), 200
 
     try:
         result = method(*args, **kwargs)
@@ -179,7 +252,33 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    _api = _init_api(args.cred_file)
+    _api, ws_access_token, ws_uid = _init_api(args.cred_file)
+
+    feed_mode = normalize_mode(os.environ.get("SHOONYA_FEED_MODE", "hybrid"))
+    if feed_mode == "rest":
+        log.info("SHOONYA_FEED_MODE=rest — WebSocket feed disabled")
+    else:
+        _feed = WSFeedManager(access_token=ws_access_token, uid=ws_uid)
+        _feed.start()
+        auto_subscribe = parse_instruments_spec(os.environ.get("SHOONYA_WS_SUBSCRIBE", ""))
+        if auto_subscribe:
+            _feed.subscribe(auto_subscribe)
+            log.info("Auto-subscribed %d instruments from SHOONYA_WS_SUBSCRIBE", len(auto_subscribe))
+        _cache_serving_enabled = cache_serving_for(feed_mode)
+        if validator_runs_for(feed_mode):
+            interval = float(os.environ.get("SHOONYA_SHADOW_INTERVAL", "30").strip() or 30)
+            threading.Thread(
+                target=run_shadow_loop,
+                args=(_api, _feed, interval),
+                daemon=True,
+                name="ws-shadow-validator",
+            ).start()
+            log.info(
+                "SHOONYA_FEED_MODE=%s — cache-serving=%s, validating subscribed instruments every %ss",
+                feed_mode,
+                _cache_serving_enabled,
+                interval,
+            )
 
     t = threading.Thread(target=_market_close_watchdog, daemon=True, name="market-close-watchdog")
     t.start()

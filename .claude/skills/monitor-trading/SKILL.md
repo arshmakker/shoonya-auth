@@ -2,12 +2,16 @@
 
 Monitor the broker_proxy and regimetrader tmux panes in the `trading` session for errors, attempt code fixes, and restart affected services.
 
+**Note:** Claude Code sessions run directly on the DigitalOcean droplet (confirmed 2026-08-26). All tmux/log commands run locally with no SSH wrapper. Code fixes are made locally in this checkout and take effect immediately since this session IS the droplet.
+
 ## Pane Map
 
-| Pane | Title | Working Dir | Restart Command |
+Matches `start_vps.sh` exactly — window is named `proxy`, pane 0 = broker_proxy, pane 1 = regimetrader, both run via the venv interpreter.
+
+| Pane | Title | Working Dir (on droplet) | Restart Command |
 |------|-------|-------------|-----------------|
-| `trading:proxy.0` | broker_proxy | `~/git/trading/shoonya-auth` | `python broker_proxy.py` |
-| `trading:proxy.1` | regimetrader | `~/git/trading/regimetrader` | `BROKER_PROXY_URL=http://127.0.0.1:7890 python main.py` |
+| `trading:proxy.0` | broker_proxy | `~/git/trading/shoonya-auth` | `./venv/bin/python broker_proxy.py` |
+| `trading:proxy.1` | regimetrader | `~/git/trading/regimetrader` | `BROKER_PROXY_URL=http://127.0.0.1:7890 ./venv/bin/python main.py` |
 
 ## Monitoring Steps (run every iteration)
 
@@ -30,9 +34,9 @@ print(now.strftime('%H:%M IST'))
 
 ### Step 1 — Confirm the session is still alive
 ```bash
-tmux has-session -t trading 2>/dev/null && echo "ALIVE" || echo "DEAD"
+tmux has-session -t trading 2>/dev/null && echo ALIVE || echo DEAD
 ```
-If the session is DEAD, report it to the user and **stop the loop** — do not try to restart start.sh automatically.
+If the session is DEAD, report it to the user and **stop the loop** — do not try to restart it automatically.
 
 ### Step 2 — Capture the last 200 lines from each pane
 For each pane index 0–1:
@@ -64,7 +68,7 @@ Look for any of these patterns (case-insensitive where noted):
 ### Step 4 — For each pane with errors
 
 #### 4a. Identify the source file
-- Look at the traceback to find the file path (e.g., `File "/Users/arshdeep/git/regimetrader/strategy.py", line 42`)
+- Look at the traceback to find the file path (e.g., `File "/root/git/trading/regimetrader/strategy.py", line 42`)
 - The last file listed in the traceback is the one that threw the error
 
 #### 4b. Attempt a code fix
@@ -73,28 +77,28 @@ Look for any of these patterns (case-insensitive where noted):
 - Apply the minimal fix with the Edit tool
 - Do NOT refactor, add features, or change logic beyond fixing the immediate error
 - If the error is ambiguous, unclear, or could affect trading safety (e.g., wrong position sizing, order logic), **do not auto-fix** — report to the user and restart anyway
+- The fix takes effect immediately since this session is already running on the droplet
 
 #### 4c. Restart the pane
 After fixing (or if the error is not code-fixable, e.g., ConnectionRefusedError):
 1. Kill the current pane content:
 ```bash
-tmux send-keys -t trading:proxy.<N> C-c
-sleep 1
-tmux send-keys -t trading:proxy.<N> C-c
+tmux send-keys -t trading:proxy.<N> C-c; sleep 1; tmux send-keys -t trading:proxy.<N> C-c
 ```
-2. Send the restart command:
+2. Send the restart command (working dir + restart command from the Pane Map above):
 ```bash
-tmux send-keys -t trading:proxy.<N> "cd <WORKING_DIR> && <RESTART_COMMAND>" Enter
+tmux send-keys -t trading:proxy.<N> 'cd <WORKING_DIR> && <RESTART_COMMAND>' Enter
 ```
 3. Wait 5 seconds and re-capture the pane to confirm it started without immediately crashing
+4. If broker_proxy (pane 0) was restarted, wait for `/health` before treating regimetrader as recoverable — see Special Cases below. If both panes needed a full restart (e.g. after the droplet itself rebooted), prefer running `cd ~/git/trading/shoonya-auth && ./start_vps.sh` over manually restarting each pane — it re-does the fresh-OAuth-login step that a bare pane restart skips.
 
 ### Step 4d — Check regimetrader P&L (WITHIN_HOURS only)
 
 Only regimetrader (the strategy in this session's monitoring scope) has a live P&L to check — broker_proxy has none.
 
-1. Find today's IC entry:
+1. Find today's IC entry (log lives locally):
 ```bash
-grep "IC.*ENTERED" ~/git/trading/regimetrader/logs/ic_system_$(date +%Y%m%d).log | tail -1
+grep 'IC.*ENTERED' ~/git/trading/regimetrader/logs/ic_system_$(date +%Y%m%d).log | tail -1
 ```
 If no entry found, report "No IC entered today" and skip the rest of this step.
 
@@ -132,7 +136,7 @@ If AFTER_HOURS or no IC entered today, omit the P&L line (or state "No IC entere
 
 ## Special Cases
 
-- **broker_proxy (pane 0) is down**: This will cascade to regimetrader. Fix/restart broker_proxy first, wait for its `/health` endpoint to respond, then check regimetrader.
+- **broker_proxy (pane 0) is down**: This will cascade to regimetrader. Fix/restart broker_proxy first, wait for its `/health` endpoint to respond (proxy is bound to `127.0.0.1:7890`), then check regimetrader.
   ```bash
   curl -sf http://127.0.0.1:7890/health
   ```
