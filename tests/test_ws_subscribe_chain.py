@@ -5,6 +5,7 @@ quotes. This pins the pure logic: weekly-expiry symbol generation and the
 strike window around live spot.
 """
 
+import json
 import os
 import sys
 from datetime import date
@@ -14,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 from ws_subscribe_chain import (
     next_weekly_expiry,
     nifty_chain_symbols,
+    position_leg_symbols,
     weekly_expiries_to_subscribe,
 )
 
@@ -73,3 +75,70 @@ def test_chain_symbol_format_matches_broker_convention():
     """Must produce exactly the shape searchscrip resolves: NIFTY08SEP26C24700."""
     syms = nifty_chain_symbols(date(2026, 9, 3), spot=24000.0, width=0, step=50)
     assert syms == ["NIFTY03SEP26C24000", "NIFTY03SEP26P24000"]
+
+
+# ── Open-position leg coverage (2026-08-26) ─────────────────────────────────
+# Root cause of that day's stale-LTP warnings: a position's own wing legs can
+# drift outside the spot-window chain, silently losing WS coverage for the
+# whole session. position_leg_symbols() must recover them regardless of
+# where the strategy nests them in the persisted state.
+
+def _write_positions(tmp_path, payload):
+    path = os.path.join(tmp_path, "open_positions.json")
+    with open(path, "w") as f:
+        json.dump(payload, f)
+    return path
+
+
+def test_position_legs_when_active_position_then_four_bare_symbols(tmp_path):
+    path = _write_positions(tmp_path, {
+        "strategies": {
+            "NIFTY": {
+                "position": {
+                    "sc_sym": "NFO|NIFTY08SEP26C24850",
+                    "sp_sym": "NFO|NIFTY08SEP26P23700",
+                    "lc_sym": "NFO|NIFTY08SEP26C25200",
+                    "lp_sym": "NFO|NIFTY08SEP26P23350",
+                }
+            }
+        }
+    })
+    assert sorted(position_leg_symbols(path)) == sorted([
+        "NIFTY08SEP26C24850",
+        "NIFTY08SEP26P23700",
+        "NIFTY08SEP26C25200",
+        "NIFTY08SEP26P23350",
+    ])
+
+
+def test_position_legs_when_flat_then_empty(tmp_path):
+    path = _write_positions(tmp_path, {
+        "session_status": "flat",
+        "strategies": {"NIFTY": {"last_exit_reason": "PROFIT_HARVEST"}},
+        "tracker_positions": {},
+    })
+    assert position_leg_symbols(path) == []
+
+
+def test_position_legs_when_no_file_then_empty(tmp_path):
+    assert position_leg_symbols(os.path.join(tmp_path, "missing.json")) == []
+
+
+def test_position_legs_when_corrupt_json_then_empty(tmp_path):
+    path = os.path.join(tmp_path, "open_positions.json")
+    with open(path, "w") as f:
+        f.write("{not json")
+    assert position_leg_symbols(path) == []
+
+
+def test_position_legs_nesting_depth_agnostic(tmp_path):
+    """Leg fields live wherever the owning strategy's save_state() puts them —
+    must not assume a fixed 'strategies/<name>/position' schema."""
+    path = _write_positions(tmp_path, {
+        "tracker_positions": {
+            "some_id": {
+                "legs": {"deep": {"sc_sym": "NFO|NIFTY08SEP26C24850"}},
+            }
+        }
+    })
+    assert position_leg_symbols(path) == ["NIFTY08SEP26C24850"]

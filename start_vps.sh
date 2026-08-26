@@ -79,7 +79,7 @@ done
 # Wide-net WS subscription: NIFTY index + full weekly strike chain around
 # live spot (CE+PE). Backgrounded so session start never blocks on it; log
 # lands in ws_chain_subscribe.log for post-boot inspection.
-nohup bash -c "sleep 25 && cd '$DIR' && ./venv/bin/python tools/ws_subscribe_chain.py" > "$DIR/ws_chain_subscribe.log" 2>&1 &
+nohup bash -c "sleep 25 && cd '$DIR' && ./venv/bin/python tools/ws_subscribe_chain.py --positions-file '$REGIME_DIR/data/open_positions.json'" > "$DIR/ws_chain_subscribe.log" 2>&1 &
 
 # Split proxy window: pane 0 (left) broker_proxy, pane 1 (right) regimetrader
 #
