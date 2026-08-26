@@ -11,6 +11,8 @@ Run AFTER broker_proxy is healthy (start_vps.sh backgrounds this):
 """
 
 import argparse
+import json
+import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
@@ -20,6 +22,10 @@ from proxy_client import post, resolve
 _RESOLVE_WORKERS = 16
 
 INDEX_SPEC = "NSE|26000"
+_POSITION_LEG_KEYS = ("sc_sym", "sp_sym", "lc_sym", "lp_sym")
+DEFAULT_POSITIONS_FILE = os.path.join(
+    os.path.dirname(__file__), "..", "..", "regimetrader", "data", "open_positions.json"
+)
 
 
 def next_weekly_expiry(today):
@@ -47,6 +53,40 @@ def nifty_chain_symbols(expiry, spot, width=800, step=50):
     return out
 
 
+def position_leg_symbols(positions_path):
+    """Bare NFO trading symbols for any open position's option legs.
+
+    A position entered on an earlier day can hold wing strikes that later
+    drift outside the spot-window chain (2026-08-26: two long legs sat
+    outside +-800pt of the day's spot and lost WS coverage for the whole
+    session). Persisted leg fields are 'NFO|<symbol>', not a resolved
+    token spec, so callers still need resolve() on the returned symbols.
+    Scans recursively since the leg fields' nesting depth is whatever the
+    owning strategy's save_state() produces, not a fixed schema.
+    """
+    try:
+        with open(positions_path) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return []
+
+    found = []
+
+    def walk(obj):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if k in _POSITION_LEG_KEYS and isinstance(v, str) and v:
+                    found.append(v)
+                else:
+                    walk(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                walk(item)
+
+    walk(data)
+    return [sym.split("|", 1)[1] if "|" in sym else sym for sym in found]
+
+
 def fetch_spot():
     quote = post("/call", {"method": "get_quotes", "args": ["NSE", "26000"]}) or {}
     return float(quote.get("lp") or 0)
@@ -55,6 +95,7 @@ def fetch_spot():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--width", type=int, default=800)
+    parser.add_argument("--positions-file", default=DEFAULT_POSITIONS_FILE)
     parser.add_argument("spot", nargs="?", type=float, default=None)
     args = parser.parse_args()
 
@@ -71,6 +112,17 @@ def main():
             if sym not in seen:
                 seen.add(sym)
                 symbols.append(sym)
+
+    # An open position's own legs must always be covered, even when they've
+    # drifted outside the spot window (2026-08-26 root cause of the day's
+    # stale-LTP warnings: both long wings sat outside +-800pt of spot).
+    leg_symbols = [s for s in position_leg_symbols(args.positions_file) if s not in seen]
+    for sym in leg_symbols:
+        seen.add(sym)
+        symbols.append(sym)
+    if leg_symbols:
+        print(f"open position legs outside/inside window: {', '.join(leg_symbols)}")
+
     print(f"spot={spot} expiries={','.join(e.strftime('%d%b%y') for e in expiries)} — resolving {len(symbols)} chain symbols")
 
     specs = [INDEX_SPEC]
