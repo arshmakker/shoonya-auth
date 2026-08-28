@@ -81,6 +81,32 @@ done
 # lands in ws_chain_subscribe.log for post-boot inspection.
 nohup bash -c "sleep 25 && cd '$DIR' && ./venv/bin/python tools/ws_subscribe_chain.py --positions-file '$REGIME_DIR/data/open_positions.json'" > "$DIR/ws_chain_subscribe.log" 2>&1 &
 
+# MCX liquid-5 commodity futures (GOLD, SILVER, CRUDEOIL, COPPER,
+# NATURALGAS — front-2 expiries each): touchline-only, observational, no
+# trading rule attached. Backgrounded same as the NIFTY chain above.
+nohup bash -c "sleep 25 && cd '$DIR' && ./venv/bin/python tools/mcx_ws_subscribe.py" > "$DIR/mcx_ws_subscribe.log" 2>&1 &
+
+# MCX tick persistence: independent REST poller (own ShoonyaApiPy session,
+# reuses the cached Access_token — safe to run alongside broker_proxy per
+# regimetrader/tools/mcx_collector.py's docstring) that appends CSVs to
+# regimetrader/market_data_YYYYMMDD/raw_data/futures/. Kill any stale
+# instance first so a same-day restart never runs two collectors at once.
+# It exits on its own at MCX session end (23:30 IST); no shutdown hook needed.
+pkill -f "tools/mcx_collector.py" 2>/dev/null || true
+
+# BankNifty spot + near-month future + options onto the WS feed: reads
+# whatever regimetrader's own SymbolManager already selected today (from
+# market_data_YYYYMMDD/raw_data/{futures,options/BANKNIFTY}), so it doesn't
+# duplicate BankNifty's expiry/strike selection logic here. CSV persistence
+# for these instruments already happens via regimetrader's own DataCollector
+# REST polling — this only adds WS cache coverage on top. Longer delay than
+# the NIFTY/MCX subscribes since it depends on regimetrader (started below)
+# having completed its first SymbolManager pass; if that hasn't happened
+# yet, it logs and exits without retrying — same fire-once convention as
+# the other backgrounded subscribes above.
+nohup bash -c "sleep 45 && cd '$DIR' && ./venv/bin/python tools/banknifty_ws_subscribe.py" > "$DIR/banknifty_ws_subscribe.log" 2>&1 &
+nohup bash -c "cd '$REGIME_DIR' && ./venv/bin/python tools/mcx_collector.py --cred '$CRED_FILE'" > "$DIR/mcx_collector.log" 2>&1 &
+
 # Split proxy window: pane 0 (left) broker_proxy, pane 1 (right) regimetrader
 #
 # NOTE: `split-window -p <percent>` resolves the percentage against an
