@@ -7,6 +7,11 @@ from unittest.mock import MagicMock
 import tick_persist
 from tick_persist import TickWriter
 
+# Fri 2026-08-28, 11:00 IST — inside every exchange session. Pinned because
+# a row is only written when the instrument's exchange is open, so an
+# unpinned suite would pass or fail depending on the hour it ran.
+_MIDSESSION = dt.datetime(2026, 8, 28, 11, 0, tzinfo=tick_persist.IST)
+
 
 def _feed(subs, quotes):
     f = MagicMock()
@@ -18,7 +23,7 @@ def _feed(subs, quotes):
 def _rows(root, symbol):
     """Read back via path_for(), so a layout change fails these tests rather
     than silently breaking every downstream consumer."""
-    day = dt.datetime.now(tick_persist.IST).strftime("%Y%m%d")
+    day = _MIDSESSION.strftime("%Y%m%d")
     with open(tick_persist.path_for(str(root), symbol, day)) as f:
         return list(csv.DictReader(f))
 
@@ -32,7 +37,7 @@ def test_snapshot_writes_bid_ask_and_names_the_file_from_the_tick(tmp_path):
                        "bp1": 40.5, "sp1": 40.9, "bq1": 75, "sq1": 50,
                        "oi": 477815, "v": 1101165}},
     )
-    assert tick_persist.snapshot_once(feed, TickWriter(str(tmp_path))) == 1
+    assert tick_persist.snapshot_once(feed, TickWriter(str(tmp_path)), _MIDSESSION) == 1
     r = _rows(tmp_path, "NIFTY08SEP26C24700")[0]
     assert r["bid"] == "40.5" and r["ask"] == "40.9" and r["ltp"] == "40.7"
     assert r["instrument"] == "NFO|42669"
@@ -45,7 +50,7 @@ def test_snapshot_writes_bid_ask_and_names_the_file_from_the_tick(tmp_path):
 def test_unnamed_instrument_still_persists_under_its_spec(tmp_path):
     """A feed that omits 'ts' must cost readability only — never data."""
     feed = _feed(["MCX|999111"], {"MCX|999111": {"lp": 158187.0, "bp1": 158156.0, "sp1": 158203.0}})
-    assert tick_persist.snapshot_once(feed, TickWriter(str(tmp_path))) == 1
+    assert tick_persist.snapshot_once(feed, TickWriter(str(tmp_path)), _MIDSESSION) == 1
     assert _rows(tmp_path, "MCX_999111")[0]["ltp"] == "158187.0"
 
 
@@ -55,9 +60,9 @@ def test_unchanged_quote_is_not_rewritten_every_pass(tmp_path):
     byte-identical repeats — and kept doing so all weekend."""
     feed = _feed(["NFO|1"], {"NFO|1": {"ts": "SYMA", "lp": 1.0, "bp1": 0.9, "sp1": 1.1}})
     w = TickWriter(str(tmp_path))
-    assert tick_persist.snapshot_once(feed, w) == 1
-    assert tick_persist.snapshot_once(feed, w) == 0
-    assert tick_persist.snapshot_once(feed, w) == 0
+    assert tick_persist.snapshot_once(feed, w, _MIDSESSION) == 1
+    assert tick_persist.snapshot_once(feed, w, _MIDSESSION) == 0
+    assert tick_persist.snapshot_once(feed, w, _MIDSESSION) == 0
     assert len(_rows(tmp_path, "SYMA")) == 1
 
 
@@ -67,9 +72,9 @@ def test_a_moved_quote_is_written_again(tmp_path):
     quotes = {"NFO|1": {"ts": "SYMA", "lp": 1.0, "bp1": 0.9, "sp1": 1.1}}
     feed = _feed(["NFO|1"], quotes)
     w = TickWriter(str(tmp_path))
-    tick_persist.snapshot_once(feed, w)
+    tick_persist.snapshot_once(feed, w, _MIDSESSION)
     quotes["NFO|1"] = {"ts": "SYMA", "lp": 1.2, "bp1": 1.1, "sp1": 1.3}
-    assert tick_persist.snapshot_once(feed, w) == 1
+    assert tick_persist.snapshot_once(feed, w, _MIDSESSION) == 1
     rows = _rows(tmp_path, "SYMA")
     assert [r["ltp"] for r in rows] == ["1.0", "1.2"]
 
@@ -79,9 +84,9 @@ def test_heartbeat_bounds_the_gap_for_a_still_instrument(tmp_path):
     entirely — after HEARTBEAT_SEC an unchanged quote is recorded anyway."""
     feed = _feed(["NFO|1"], {"NFO|1": {"ts": "SYMA", "lp": 1.0, "bp1": 0.9, "sp1": 1.1}})
     w = TickWriter(str(tmp_path))
-    tick_persist.snapshot_once(feed, w)
+    tick_persist.snapshot_once(feed, w, _MIDSESSION)
     w._last["NFO|1"] = (w._last["NFO|1"][0], w._last["NFO|1"][1] - tick_persist.HEARTBEAT_SEC - 1)
-    assert tick_persist.snapshot_once(feed, w) == 1
+    assert tick_persist.snapshot_once(feed, w, _MIDSESSION) == 1
 
 
 def test_oi_and_volume_do_not_count_as_a_quote_change(tmp_path):
@@ -90,9 +95,9 @@ def test_oi_and_volume_do_not_count_as_a_quote_change(tmp_path):
     quotes = {"NFO|1": {"ts": "SYMA", "lp": 1.0, "bp1": 0.9, "sp1": 1.1, "oi": 10, "v": 100}}
     feed = _feed(["NFO|1"], quotes)
     w = TickWriter(str(tmp_path))
-    tick_persist.snapshot_once(feed, w)
+    tick_persist.snapshot_once(feed, w, _MIDSESSION)
     quotes["NFO|1"] = {**quotes["NFO|1"], "oi": 11, "v": 250}
-    assert tick_persist.snapshot_once(feed, w) == 0
+    assert tick_persist.snapshot_once(feed, w, _MIDSESSION) == 0
 
 
 def test_snapshot_survives_a_failing_feed(tmp_path):
@@ -100,19 +105,19 @@ def test_snapshot_survives_a_failing_feed(tmp_path):
     a status() or get_quote() fault has to degrade to fewer rows."""
     bad = MagicMock()
     bad.status.side_effect = RuntimeError("feed down")
-    assert tick_persist.snapshot_once(bad, TickWriter(str(tmp_path))) == 0
+    assert tick_persist.snapshot_once(bad, TickWriter(str(tmp_path)), _MIDSESSION) == 0
 
     partial = MagicMock()
     partial.status.return_value = {"subscriptions": ["NFO|1", "NFO|2"]}
     partial.get_quote.side_effect = [RuntimeError("boom"), {"ts": "SYMB", "lp": 5.0}]
-    assert tick_persist.snapshot_once(partial, TickWriter(str(tmp_path))) == 1
+    assert tick_persist.snapshot_once(partial, TickWriter(str(tmp_path)), _MIDSESSION) == 1
 
 
 def test_missing_or_empty_tick_is_skipped_not_written_blank(tmp_path):
     """An instrument subscribed but not yet ticking must produce no row — a
     blank row would read as a real observation of a zero price."""
     feed = _feed(["NFO|1", "NFO|2"], {"NFO|2": {"ts": "SYMB", "lp": 3.0}})
-    assert tick_persist.snapshot_once(feed, TickWriter(str(tmp_path))) == 1
+    assert tick_persist.snapshot_once(feed, TickWriter(str(tmp_path)), _MIDSESSION) == 1
 
 
 def test_day_rollover_releases_the_previous_day_handle(tmp_path):
@@ -137,6 +142,60 @@ def test_symbol_with_a_space_becomes_a_safe_filename(tmp_path):
     globbing downstream. The row keeps the true symbol, only the path is
     sanitised."""
     feed = _feed(["NSE|26000"], {"NSE|26000": {"ts": "Nifty 50", "lp": 24124.45}})
-    assert tick_persist.snapshot_once(feed, TickWriter(str(tmp_path))) == 1
+    assert tick_persist.snapshot_once(feed, TickWriter(str(tmp_path)), _MIDSESSION) == 1
     assert tick_persist.safe_name("Nifty 50") == "Nifty_50"
     assert _rows(tmp_path, "Nifty 50")[0]["symbol"] == "Nifty 50"
+
+
+def _at(h, m):
+    """Fri 2026-08-28 (a weekday) at the given IST time."""
+    return _MIDSESSION.replace(hour=h, minute=m)
+
+
+def test_nse_stops_heartbeating_after_its_own_close(tmp_path):
+    """The proxy now runs to 23:58 for MCX. Without a per-exchange gate the
+    ~200 NSE/NFO instruments would repeat a dead quote once a minute for the
+    eight hours after 15:30 — ~96k identical rows a day on a 1GB box."""
+    assert tick_persist.in_session("NFO|1", _at(14, 0)) is True
+    assert tick_persist.in_session("NFO|1", _at(16, 0)) is False
+
+    w = TickWriter(str(tmp_path))
+    quote = {"ts": "SYMA", "lp": 1.0, "bp1": 0.9, "sp1": 1.1, "bq1": 1, "sq1": 1}
+    assert w.should_write("NFO|1", quote, 0.0, False) is True          # first sight
+    assert w.should_write("NFO|1", quote, 10_000.0, False) is False    # no heartbeat
+
+
+def test_a_real_move_is_written_even_after_close(tmp_path):
+    """Suppressing the heartbeat must not suppress a genuine post-close print —
+    a settlement or an after-hours correction still belongs in the series."""
+    w = TickWriter(str(tmp_path))
+    base = {"ts": "SYMA", "lp": 1.0, "bp1": 0.9, "sp1": 1.1, "bq1": 1, "sq1": 1}
+    assert w.should_write("NFO|1", base, 0.0, False) is True
+    assert w.should_write("NFO|1", {**base, "lp": 2.0}, 1.0, False) is True
+
+
+def test_mcx_still_heartbeats_through_the_evening(tmp_path):
+    """MCX runs to 23:30 (23:55 on US-DST days) — the whole point of the
+    extension is that its series stays sampled that long."""
+    assert tick_persist.in_session("MCX|1", _at(20, 0)) is True
+    assert tick_persist.in_session("MCX|1", _at(23, 40)) is True
+
+    w = TickWriter(str(tmp_path))
+    quote = {"ts": "GOLD", "lp": 1.0, "bp1": 0.9, "sp1": 1.1, "bq1": 1, "sq1": 1}
+    assert w.should_write("MCX|1", quote, 0.0, True) is True
+    assert w.should_write("MCX|1", quote, tick_persist.HEARTBEAT_SEC + 1, True) is True
+
+
+def test_unknown_exchange_fails_open(tmp_path):
+    """A segment we have no window for must degrade to redundant rows, never to
+    a silent hole in the series."""
+    assert tick_persist.in_session("BCD|1", _at(21, 0)) is True
+
+
+def test_nothing_heartbeats_over_the_weekend(tmp_path):
+    """The proxy does not auto-exit on a weekend, and the box now stays up — so
+    a Saturday would otherwise write ~1.2M frozen rows."""
+    saturday = dt.datetime(2026, 8, 29, 12, 0, tzinfo=tick_persist.IST)
+    assert saturday.weekday() == 5
+    assert tick_persist.in_session("MCX|1", saturday) is False
+    assert tick_persist.in_session("BCD|1", saturday) is False

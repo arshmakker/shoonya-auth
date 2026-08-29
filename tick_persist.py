@@ -29,7 +29,10 @@ Design notes:
     a dead quote — and, since the proxy can outlive a session, ~1.2M frozen
     rows over a weekend. A row is written when the quote actually moved, or
     when HEARTBEAT_SEC has passed with no write, so gaps stay bounded and the
-    output is still readable as a time series.
+    output is still readable as a time series. The heartbeat is gated by the
+    instrument's own exchange session (see in_session): the proxy now runs to
+    23:58 for MCX, and NSE/NFO must not keep ticking a dead quote for the eight
+    hours after they close. This also settles the weekend case above.
   - File handles are cached per (symbol, day). Reopening ~200 files every 5s
     cost ~7-9 syscalls per row; cached handles cost one write, with a flush at
     the end of each pass so a kill loses at most one pass.
@@ -53,6 +56,41 @@ IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 DEFAULT_INTERVAL_SEC = 5.0
 # Longest gap tolerated between rows for an instrument that is not moving.
 HEARTBEAT_SEC = 60.0
+
+# Per-exchange session end (IST). The heartbeat exists to bound gaps in a LIVE
+# series; once an exchange has closed there is no series to bound, only a frozen
+# quote repeating itself. Without this gate the ~200 NSE/NFO instruments keep
+# emitting a row a minute for the eight hours the proxy now stays up for MCX —
+# ~96k byte-identical rows a day.
+#
+# NSE/NFO cash and F&O close 15:30; 15:40 matches the proxy's own buffer. MCX
+# runs to 23:30, or 23:55 on US daylight-saving days, so its window is set past
+# both. CDS closes 17:00.
+_SESSION_START = (9, 0)
+_SESSION_END = {
+    "NSE": (15, 40),
+    "NFO": (15, 40),
+    "BSE": (15, 40),
+    "BFO": (15, 40),
+    "CDS": (17, 10),
+    "MCX": (23, 58),
+}
+
+
+def in_session(spec: str, now: dt.datetime) -> bool:
+    """Is this instrument's exchange trading at `now` (IST)?
+
+    Fails OPEN on an unrecognised exchange: a new segment should degrade to some
+    redundant rows, never to a silent hole in the series. No Indian exchange
+    trades at the weekend, so that check applies to every spec.
+    """
+    if now.weekday() >= 5:
+        return False
+    end = _SESSION_END.get(spec.partition("|")[0].upper())
+    if end is None:
+        return True
+    return _SESSION_START <= (now.hour, now.minute) <= end
+
 
 COLUMNS = (
     "snap_time",   # when this process read the cache
@@ -121,11 +159,17 @@ class TickWriter:
             except OSError:
                 pass
 
-    def should_write(self, spec: str, quote: dict, now_mono: float) -> bool:
+    def should_write(
+        self, spec: str, quote: dict, now_mono: float, session_open: bool = True
+    ) -> bool:
         sig = tuple(quote.get(f) for f in _CHANGE_FIELDS)
         prev = self._last.get(spec)
-        if prev is not None and prev[0] == sig and now_mono - prev[1] < HEARTBEAT_SEC:
-            return False
+        if prev is not None and prev[0] == sig:
+            # Outside its session an instrument gets no heartbeat at all. A
+            # genuine post-close move still falls through and is written, so a
+            # settlement print or an after-hours correction is not lost.
+            if not session_open or now_mono - prev[1] < HEARTBEAT_SEC:
+                return False
         self._last[spec] = (sig, now_mono)
         return True
 
@@ -141,11 +185,15 @@ class TickWriter:
                 log.warning("tick-persist: flush failed: %s", e)
 
 
-def snapshot_once(feed, writer: TickWriter) -> int:
+def snapshot_once(feed, writer: TickWriter, now: dt.datetime | None = None) -> int:
     """One pass over every subscribed instrument. Returns rows written.
 
     Never raises: this shares a process with quote serving, so a feed or disk
     fault has to degrade to fewer rows rather than kill the thread.
+
+    `now` is injectable so tests are not silently clock-dependent: whether a row
+    is written now depends on the session window, so a suite pinned to no
+    particular time would pass or fail by the hour it happened to run.
     """
     try:
         subs = feed.status().get("subscriptions") or []
@@ -153,7 +201,7 @@ def snapshot_once(feed, writer: TickWriter) -> int:
         log.warning("tick-persist: status() failed: %s", e)
         return 0
 
-    now = dt.datetime.now(IST)
+    now = now or dt.datetime.now(IST)
     day = now.strftime("%Y%m%d")
     snap_time = now.isoformat()
     now_mono = time.monotonic()
@@ -169,7 +217,7 @@ def snapshot_once(feed, writer: TickWriter) -> int:
             q = feed.get_quote(exchange, token, max_age_sec=float("inf"))
         except Exception:
             continue
-        if not q or not writer.should_write(spec, q, now_mono):
+        if not q or not writer.should_write(spec, q, now_mono, in_session(spec, now)):
             continue
         symbol = q.get("ts") or spec.replace("|", "_")
         try:

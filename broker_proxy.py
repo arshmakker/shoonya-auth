@@ -221,24 +221,33 @@ def call_method():
         return jsonify({"error": str(exc)}), 502
 
 
-# Proxy shuts down at 15:40 IST — traders exit by ~15:35, this gives them a clean buffer.
-_PROXY_SHUTDOWN_TIME = (15, 40)
+# Proxy shuts down at 23:58 IST, after the MCX evening session. MCX closes at
+# 23:30, or 23:55 on US daylight-saving days, so this clears both while staying
+# on the same calendar day.
+#
+# It used to be 15:40 — a clean buffer past the 15:30 NSE close, which was all
+# that mattered while the droplet was powered off each afternoon. The box now
+# stays up (powering a DO droplet off does not stop the bill), so the proxy is
+# the only thing that was ending the day early and taking the MCX feed with it.
+# tick_persist gates its heartbeat per exchange, so the NSE/NFO instruments go
+# quiet at their own close rather than repeating a dead quote until 23:58.
+_PROXY_SHUTDOWN_TIME = (23, 58)
 
 
 def _market_close_watchdog() -> None:
-    """Background thread: sleep until 15:40 IST, then exit the proxy."""
+    """Background thread: sleep until the shutdown time (IST), then exit."""
     now = datetime.now(_IST)
     h, m = _PROXY_SHUTDOWN_TIME
     target = now.replace(hour=h, minute=m, second=0, microsecond=0)
     if now.weekday() >= 5:
         return  # weekend — don't auto-exit
     if now >= target:
-        log.info("Started after market close (%02d:%02d IST) — shutting down", h, m)
+        log.info("Started after session close (%02d:%02d IST) — shutting down", h, m)
         os._exit(0)
     delay = (target - now).total_seconds()
-    log.info("Market-close watchdog armed — will shut down at %02d:%02d IST (%.0fs)", h, m, delay)
+    log.info("Session-close watchdog armed — will shut down at %02d:%02d IST (%.0fs)", h, m, delay)
     time.sleep(delay)
-    log.info("Market closed — proxy shutting down")
+    log.info("Session closed — proxy shutting down")
     os._exit(0)
 
 
