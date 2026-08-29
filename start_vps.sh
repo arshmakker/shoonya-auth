@@ -49,7 +49,13 @@ tmux set-option -t "$SESSION" pane-border-format " #{pane_title} "
 
 # WS feed: hybrid mode — fresh cached ticks served to consumers, REST fallback.
 # Flip back to SHOONYA_FEED_MODE=shadow if validation ever needs re-running.
-tmux send-keys -t "$SESSION:proxy" "cd $DIR && SHOONYA_FEED_MODE=hybrid ./venv/bin/python broker_proxy.py" Enter
+# SHOONYA_TICK_PERSIST_DIR turns on in-process persistence of every subscribed
+# instrument (option legs, MCX, index) to per-day CSVs. In-process because the
+# proxy already owns the tick store: a separate collector would cost another
+# Python interpreter on a 1GB box plus an HTTP round-trip per instrument, to
+# read memory this process already holds. ~5MB/day at 5s across ~35 subscribed
+# instruments; see tick_persist.py.
+tmux send-keys -t "$SESSION:proxy" "cd $DIR && SHOONYA_FEED_MODE=hybrid SHOONYA_TICK_PERSIST_DIR='$REGIME_DIR' ./venv/bin/python broker_proxy.py" Enter
 tmux select-pane -t "$SESSION:proxy.0" -T "🔌 broker_proxy"
 
 # Wait up to 90s for proxy to be healthy
@@ -106,21 +112,6 @@ pkill -f "tools/mcx_collector.py" 2>/dev/null || true
 # the other backgrounded subscribes above.
 nohup bash -c "sleep 45 && cd '$DIR' && ./venv/bin/python tools/banknifty_ws_subscribe.py" > "$DIR/banknifty_ws_subscribe.log" 2>&1 &
 nohup bash -c "cd '$REGIME_DIR' && ./venv/bin/python tools/mcx_collector.py --cred '$CRED_FILE'" > "$DIR/mcx_collector.log" 2>&1 &
-
-# Per-leg bid/ask for the OPEN position's legs. MCX has had a collector writing
-# per-contract CSVs since day one; the NIFTY option legs we actually trade have
-# had nothing — market_data's option collector only captures strikes near spot
-# and never the traded wings, and tick_store is in-memory. Without leg-level
-# bid/ask, actionable_pnl cannot be replayed, so floor/timer questions can only
-# be argued rather than measured (2026-08-29).
-#
-# Reads broker_proxy's /tick cache, which ws_subscribe_chain has already filled
-# with these exact legs — so this makes NO broker API calls and adds nothing to
-# the throttle budget. Longer delay than the chain subscribe it depends on.
-# Kill any stale instance first so a same-day restart never doubles up; it exits
-# on its own at session end.
-pkill -f "tools/leg_tick_collector.py" 2>/dev/null || true
-nohup bash -c "sleep 60 && cd '$DIR' && ./venv/bin/python tools/leg_tick_collector.py" > "$DIR/leg_tick_collector.log" 2>&1 &
 
 # Split proxy window: pane 0 (left) broker_proxy, pane 1 (right) regimetrader
 #
