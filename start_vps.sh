@@ -107,6 +107,21 @@ pkill -f "tools/mcx_collector.py" 2>/dev/null || true
 nohup bash -c "sleep 45 && cd '$DIR' && ./venv/bin/python tools/banknifty_ws_subscribe.py" > "$DIR/banknifty_ws_subscribe.log" 2>&1 &
 nohup bash -c "cd '$REGIME_DIR' && ./venv/bin/python tools/mcx_collector.py --cred '$CRED_FILE'" > "$DIR/mcx_collector.log" 2>&1 &
 
+# Per-leg bid/ask for the OPEN position's legs. MCX has had a collector writing
+# per-contract CSVs since day one; the NIFTY option legs we actually trade have
+# had nothing — market_data's option collector only captures strikes near spot
+# and never the traded wings, and tick_store is in-memory. Without leg-level
+# bid/ask, actionable_pnl cannot be replayed, so floor/timer questions can only
+# be argued rather than measured (2026-08-29).
+#
+# Reads broker_proxy's /tick cache, which ws_subscribe_chain has already filled
+# with these exact legs — so this makes NO broker API calls and adds nothing to
+# the throttle budget. Longer delay than the chain subscribe it depends on.
+# Kill any stale instance first so a same-day restart never doubles up; it exits
+# on its own at session end.
+pkill -f "tools/leg_tick_collector.py" 2>/dev/null || true
+nohup bash -c "sleep 60 && cd '$DIR' && ./venv/bin/python tools/leg_tick_collector.py" > "$DIR/leg_tick_collector.log" 2>&1 &
+
 # Split proxy window: pane 0 (left) broker_proxy, pane 1 (right) regimetrader
 #
 # NOTE: `split-window -p <percent>` resolves the percentage against an
