@@ -53,8 +53,11 @@ tmux set-option -t "$SESSION" pane-border-format " #{pane_title} "
 # instrument (option legs, MCX, index) to per-day CSVs. In-process because the
 # proxy already owns the tick store: a separate collector would cost another
 # Python interpreter on a 1GB box plus an HTTP round-trip per instrument, to
-# read memory this process already holds. ~5MB/day at 5s across ~35 subscribed
-# instruments; see tick_persist.py.
+# read memory this process already holds. The subscription set is ~200
+# instruments (ws_subscribe_chain alone spans 33 strikes x 2 x 3 expiries), so
+# rows are written on quote CHANGE with a 60s heartbeat rather than every pass —
+# writing all of them every 5s would be ~920k rows/day, mostly identical repeats
+# of far-OTM strikes that never requote. See tick_persist.py.
 tmux send-keys -t "$SESSION:proxy" "cd $DIR && SHOONYA_FEED_MODE=hybrid SHOONYA_TICK_PERSIST_DIR='$REGIME_DIR' ./venv/bin/python broker_proxy.py" Enter
 tmux select-pane -t "$SESSION:proxy.0" -T "🔌 broker_proxy"
 

@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from api_helper import ShoonyaApiPy
 from quote_bridge import CACHE_MISS, QUOTE_METHODS, serve_quote_from_cache
 from shadow import run_shadow_loop
-from tick_persist import register_symbols, start as start_tick_persist
+from tick_persist import IST as _IST, start as start_tick_persist
 from ws_feed import (
     WSFeedManager,
     cache_serving_for,
@@ -160,9 +160,6 @@ def subscribe_instruments():
         return jsonify({"error": "'instruments' must be a non-empty list of 'EXCHANGE|TOKEN' strings"}), 400
     if _feed is None:
         return jsonify({"error": "feed disabled (SHOONYA_FEED_MODE=rest)"}), 409
-    # Optional {spec: symbol} map so persisted CSVs carry readable names.
-    # Absent, files fall back to EXCHANGE_TOKEN — readability only, never data.
-    register_symbols(data.get("symbols") or {})
     if action == "unsubscribe":
         _feed.unsubscribe(instruments)
     else:
@@ -224,7 +221,6 @@ def call_method():
         return jsonify({"error": str(exc)}), 502
 
 
-_IST = timezone(timedelta(hours=5, minutes=30))
 # Proxy shuts down at 15:40 IST — traders exit by ~15:35, this gives them a clean buffer.
 _PROXY_SHUTDOWN_TIME = (15, 40)
 
@@ -273,13 +269,11 @@ if __name__ == "__main__":
         # Python interpreter (~30-80MB of a 1GB box) plus an HTTP round-trip per
         # instrument, to read memory we already hold. Snapshot thread, not a
         # request hook — a slow disk stalls only the writer.
-        persist_dir = os.environ.get("SHOONYA_TICK_PERSIST_DIR", "").strip()
-        if persist_dir:
-            start_tick_persist(
-                _feed,
-                os.path.expanduser(persist_dir),
-                float(os.environ.get("SHOONYA_TICK_PERSIST_SEC", "5").strip() or 5),
-            )
+        start_tick_persist(
+            _feed,
+            os.environ.get("SHOONYA_TICK_PERSIST_DIR", ""),
+            float(os.environ.get("SHOONYA_TICK_PERSIST_SEC", "5").strip() or 5),
+        )
 
         _cache_serving_enabled = cache_serving_for(feed_mode)
         if validator_runs_for(feed_mode):

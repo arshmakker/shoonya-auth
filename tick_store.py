@@ -21,7 +21,10 @@ _NUMERIC_FIELDS = {
     "oi": int,
     "v": int,
 }
-_PASSTHROUGH_FIELDS = ("ts", "e", "tk")
+# 'ts' is Noren's TRADING SYMBOL, not a timestamp; 'ft' is the feed time.
+# Both are kept: consumers need the name to label data and the feed clock to
+# tell a fresh quote from a stale cache entry.
+_PASSTHROUGH_FIELDS = ("ts", "e", "tk", "ft")
 
 
 class TickStore:
