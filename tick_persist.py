@@ -43,6 +43,7 @@ import csv
 import datetime as dt
 import logging
 import os
+import re
 import threading
 import time
 
@@ -73,9 +74,20 @@ COLUMNS = (
 _CHANGE_FIELDS = ("lp", "bp1", "sp1", "bq1", "sq1")
 
 
+# Noren symbols are not all filename-safe: the index arrives as "Nifty 50",
+# which produces a path with a space that breaks naive globbing downstream.
+_UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def safe_name(symbol: str) -> str:
+    return _UNSAFE.sub("_", symbol).strip("_") or "unknown"
+
+
 def path_for(root: str, symbol: str, day: str) -> str:
     """Where a given instrument's rows for a given day live."""
-    return os.path.join(root, f"market_data_{day}", "raw_data", "ticks", f"{symbol}_{day}.csv")
+    return os.path.join(
+        root, f"market_data_{day}", "raw_data", "ticks", f"{safe_name(symbol)}_{day}.csv"
+    )
 
 
 class TickWriter:

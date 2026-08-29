@@ -130,3 +130,13 @@ def test_start_is_opt_in(tmp_path):
     so it should be a deliberate choice."""
     assert tick_persist.start(MagicMock(), None) is None
     assert tick_persist.start(MagicMock(), "   ") is None
+
+
+def test_symbol_with_a_space_becomes_a_safe_filename(tmp_path):
+    """Noren sends the index as "Nifty 50"; a path with a space breaks naive
+    globbing downstream. The row keeps the true symbol, only the path is
+    sanitised."""
+    feed = _feed(["NSE|26000"], {"NSE|26000": {"ts": "Nifty 50", "lp": 24124.45}})
+    assert tick_persist.snapshot_once(feed, TickWriter(str(tmp_path))) == 1
+    assert tick_persist.safe_name("Nifty 50") == "Nifty_50"
+    assert _rows(tmp_path, "Nifty 50")[0]["symbol"] == "Nifty 50"
