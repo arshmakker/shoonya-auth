@@ -107,7 +107,10 @@ def fetch(proxy: str, token: str, start: dt.datetime, end: dt.datetime, interval
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--proxy", default=DEFAULT_PROXY)
-    ap.add_argument("--probe", action="store_true", help="retention check only: one leg, oldest day")
+    ap.add_argument("--probe", action="store_true", help="retention check only: one leg, one day")
+    ap.add_argument("--day", help="YYYYMMDD to probe/pull (default: all; probe uses the oldest). "
+                                  "Expired contracts drop off the symbol master, so probe a day "
+                                  "whose expiry is still live.")
     ap.add_argument("--out", default="./leg_series", help="directory for the CSVs")
     ap.add_argument("--interval", default="1", help="candle interval in minutes (default 1)")
     args = ap.parse_args()
@@ -121,6 +124,12 @@ def main() -> int:
         return 1
 
     print(f"Found live fills on {len(days)} day(s): {', '.join(sorted(days))}\n")
+
+    if args.day:
+        days = {k: v for k, v in days.items() if k == args.day}
+        if not days:
+            sys.stderr.write(f"no fills logged on {args.day}\n")
+            return 1
 
     if args.probe:
         day = sorted(days)[0]
