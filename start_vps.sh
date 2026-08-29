@@ -95,12 +95,10 @@ nohup bash -c "sleep 25 && cd '$DIR' && ./venv/bin/python tools/ws_subscribe_cha
 # trading rule attached. Backgrounded same as the NIFTY chain above.
 nohup bash -c "sleep 25 && cd '$DIR' && ./venv/bin/python tools/mcx_ws_subscribe.py" > "$DIR/mcx_ws_subscribe.log" 2>&1 &
 
-# MCX tick persistence: independent REST poller (own ShoonyaApiPy session,
-# reuses the cached Access_token — safe to run alongside broker_proxy per
-# regimetrader/tools/mcx_collector.py's docstring) that appends CSVs to
-# regimetrader/market_data_YYYYMMDD/raw_data/futures/. Kill any stale
-# instance first so a same-day restart never runs two collectors at once.
-# It exits on its own at MCX session end (23:30 IST); no shutdown hook needed.
+# mcx_collector.py (REST poller -> raw_data/futures/) was retired: the same 28
+# contracts are streamed by mcx_ws_subscribe.py above and written by the proxy's
+# own tick_persist, which costs no broker API calls at all. The pkill stays for
+# one deploy cycle to stop an instance left running by a previous start.
 pkill -f "tools/mcx_collector.py" 2>/dev/null || true
 
 # BankNifty spot + near-month future + options onto the WS feed: reads
@@ -114,7 +112,6 @@ pkill -f "tools/mcx_collector.py" 2>/dev/null || true
 # yet, it logs and exits without retrying — same fire-once convention as
 # the other backgrounded subscribes above.
 nohup bash -c "sleep 45 && cd '$DIR' && ./venv/bin/python tools/banknifty_ws_subscribe.py" > "$DIR/banknifty_ws_subscribe.log" 2>&1 &
-nohup bash -c "cd '$REGIME_DIR' && ./venv/bin/python tools/mcx_collector.py --cred '$CRED_FILE'" > "$DIR/mcx_collector.log" 2>&1 &
 
 # Split proxy window: pane 0 (left) broker_proxy, pane 1 (right) regimetrader
 #
