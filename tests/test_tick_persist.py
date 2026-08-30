@@ -199,3 +199,51 @@ def test_nothing_heartbeats_over_the_weekend(tmp_path):
     assert saturday.weekday() == 5
     assert tick_persist.in_session("MCX|1", saturday) is False
     assert tick_persist.in_session("BCD|1", saturday) is False
+
+
+def test_mcx_trades_the_evening_on_an_nse_holiday(tmp_path):
+    """The whole reason NSE's calendar cannot be reused for MCX: on eleven days
+    a year NSE is shut and MCX closes only its morning, trading the evening as
+    usual. Applying the NSE list to MCX would discard real commodity ticks —
+    unrecoverable, unlike the frozen rows this gate exists to suppress."""
+    ganesh_morning = dt.datetime(2026, 9, 14, 11, 0, tzinfo=tick_persist.IST)
+    ganesh_evening = dt.datetime(2026, 9, 14, 20, 0, tzinfo=tick_persist.IST)
+    assert ganesh_morning.weekday() < 5  # a Monday, not a weekend effect
+
+    assert tick_persist.in_session("MCX|1", ganesh_morning) is False
+    assert tick_persist.in_session("MCX|1", ganesh_evening) is True
+    # NSE is shut for the whole day, both sides of 17:00.
+    assert tick_persist.in_session("NFO|1", ganesh_morning) is False
+    assert tick_persist.in_session("NFO|1", ganesh_evening) is False
+
+
+def test_a_full_holiday_closes_both_exchanges(tmp_path):
+    """Four days in 2026 close MCX's evening too — Republic Day, Good Friday,
+    Gandhi Jayanti, Christmas."""
+    for day in ("2026-10-02", "2026-12-25"):
+        d = dt.date.fromisoformat(day)
+        evening = dt.datetime(d.year, d.month, d.day, 20, 0, tzinfo=tick_persist.IST)
+        assert tick_persist.in_session("MCX|1", evening) is False, day
+        assert tick_persist.in_session("NFO|1", evening) is False, day
+
+
+def test_muhurat_sunday_still_persists(tmp_path):
+    """Diwali muhurat is the one session of the year that falls on a Sunday.
+    The weekday check would otherwise discard it entirely."""
+    muhurat = dt.datetime(2026, 11, 8, 18, 30, tzinfo=tick_persist.IST)
+    assert muhurat.weekday() == 6
+    assert tick_persist.in_session("NFO|1", muhurat) is True
+
+    ordinary_sunday = dt.datetime(2026, 11, 15, 18, 30, tzinfo=tick_persist.IST)
+    assert tick_persist.in_session("NFO|1", ordinary_sunday) is False
+
+
+def test_an_uncovered_year_fails_open(tmp_path):
+    """The calendars are hardcoded for 2026. When they run out the gate must
+    persist everything and say so, not silently stop writing on every day of
+    2027."""
+    tick_persist._calendar_warned = False
+    y2027 = dt.datetime(2027, 3, 10, 11, 0, tzinfo=tick_persist.IST)
+    assert tick_persist.in_session("NFO|1", y2027) is True
+    # Even at an hour that would be outside any session in a covered year.
+    assert tick_persist.in_session("NFO|1", y2027.replace(hour=22)) is True

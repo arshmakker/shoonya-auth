@@ -76,19 +76,98 @@ _SESSION_END = {
     "MCX": (23, 58),
 }
 
+# Holiday calendars. NSE and MCX do NOT share one, and the difference is not a
+# detail: on most days NSE is shut, MCX closes only its morning session and
+# trades the evening as normal. Treating the NSE list as universal would throw
+# away real commodity ticks on eleven days a year — a worse failure than the
+# frozen rows this gate exists to prevent, because the data is unrecoverable.
+_CALENDAR_YEARS = frozenset({2026})
+
+# Both sessions closed — nothing trades on either exchange.
+_FULL_HOLIDAYS = frozenset({
+    "2026-01-26",  # Republic Day
+    "2026-04-03",  # Good Friday
+    "2026-10-02",  # Mahatma Gandhi Jayanti
+    "2026-12-25",  # Christmas
+})
+
+# NSE shut all day; MCX morning shut but its EVENING session trades as usual.
+_MCX_EVENING_ONLY = frozenset({
+    "2026-01-15",  # Municipal Corporation Election - Maharashtra
+    "2026-03-03",  # Holi
+    "2026-03-26",  # Shri Ram Navami
+    "2026-03-31",  # Shri Mahavir Jayanti
+    "2026-04-14",  # Dr. Baba Saheb Ambedkar Jayanti
+    "2026-05-01",  # Maharashtra Day
+    "2026-05-28",  # Bakri Id
+    "2026-06-26",  # Muharram
+    "2026-09-14",  # Ganesh Chaturthi
+    "2026-10-20",  # Dussehra
+    "2026-11-10",  # Diwali-Balipratipada
+    "2026-11-24",  # Prakash Gurpurb Sri Guru Nanak Dev
+})
+_MCX_EVENING_START = (17, 0)
+
+# Dates that trade despite falling on a weekend (Diwali muhurat). Without this
+# the weekday check would discard the one session of the year that only ever
+# happens on a Sunday. The whole day is treated as open rather than the real
+# ~1h window: a few frozen rows cost far less than missing the session, and
+# regimetrader's own MUHURAT_SESSIONS is still empty pending the NSE circular.
+_SPECIAL_SESSIONS = frozenset({
+    "2026-11-08",  # Diwali Laxmi Pujan — muhurat trading, a Sunday
+})
+
+_calendar_warned = False
+
 
 def in_session(spec: str, now: dt.datetime) -> bool:
     """Is this instrument's exchange trading at `now` (IST)?
 
-    Fails OPEN on an unrecognised exchange: a new segment should degrade to some
-    redundant rows, never to a silent hole in the series. No Indian exchange
-    trades at the weekend, so that check applies to every spec.
+    Fails OPEN wherever it does not know: an unrecognised exchange, or a year
+    the calendars do not cover. A new segment or a new year should degrade to
+    some redundant rows, never to a silent hole in the series — rows can be
+    filtered later, ticks that were never written cannot be recovered. The
+    weekend rule is the one exception applied to every exchange.
     """
+    global _calendar_warned
+    day = now.date().isoformat()
+
+    if now.year not in _CALENDAR_YEARS:
+        if not _calendar_warned:
+            log.warning(
+                "tick-persist: no holiday calendar for %d — persisting every day. "
+                "Update _FULL_HOLIDAYS / _MCX_EVENING_ONLY in tick_persist.py.",
+                now.year,
+            )
+            _calendar_warned = True
+        return True
+
+    # A muhurat date is open all day by design (see _SPECIAL_SESSIONS): the real
+    # window is roughly an hour in the evening, well outside every normal
+    # _SESSION_END, so gating it on those hours would suppress exactly the
+    # session this exists to keep.
+    if day in _SPECIAL_SESSIONS:
+        return True
+
+    # No Indian exchange trades at the weekend, so this holds for an
+    # unrecognised one too — it is knowledge about the country, not the segment.
     if now.weekday() >= 5:
         return False
-    end = _SESSION_END.get(spec.partition("|")[0].upper())
+
+    exchange = spec.partition("|")[0].upper()
+    end = _SESSION_END.get(exchange)
     if end is None:
         return True
+
+    if day in _FULL_HOLIDAYS:
+        return False
+
+    if day in _MCX_EVENING_ONLY:
+        # NSE and the rest are shut all day; MCX picks its evening up at 17:00.
+        if exchange != "MCX":
+            return False
+        return _MCX_EVENING_START <= (now.hour, now.minute) <= end
+
     return _SESSION_START <= (now.hour, now.minute) <= end
 
 
