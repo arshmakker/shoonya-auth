@@ -13,7 +13,14 @@ TARGETS=(
 SEGMENTS=(NSE NFO BSE MCX)
 BASE_URL="https://api.Shoonya.com"
 TMPDIR_BASE=$(mktemp -d)
-trap 'rm -rf "$TMPDIR_BASE"' EXIT
+cleanup() {
+    rm -rf "$TMPDIR_BASE"
+    # Drop any staged temp masters a failed run left behind.
+    for t in "${TARGETS[@]}"; do
+        [[ -d "$t" ]] && rm -f "$t"/*.csv.tmp.* 2>/dev/null || true
+    done
+}
+trap cleanup EXIT
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
@@ -54,7 +61,18 @@ for target in "${TARGETS[@]}"; do
         if [[ -f "$dst" ]]; then
             cp "$dst" "${backup_dir}/${seg}.csv"
         fi
-        cp "$src" "$dst"
+        # Atomic publish. A plain `cp` truncates $dst and then streams into it,
+        # leaving a window (NFO.csv is ~6MB) where a reader sees a partial or
+        # empty file. That window is live: data_collector.py builds a fresh
+        # SymbolManager and calls load_symbol_files() during a running session,
+        # so a collection cycle landing mid-copy would pd.read_csv() a truncated
+        # master. Staging alongside $dst keeps the temp file on the same
+        # filesystem, so `mv` is a rename(2) — readers see either the old file
+        # or the new one, never a half-written one, and the refresh is safe to
+        # run while the trading session is live.
+        tmp_dst="${dst}.tmp.$$"
+        cp "$src" "$tmp_dst"
+        mv -f "$tmp_dst" "$dst"
     done
     log "Updated $target (backup in .backup_${DATE_TAG})"
 done
