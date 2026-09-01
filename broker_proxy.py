@@ -150,6 +150,37 @@ def tick(key):
     return jsonify(quote)
 
 
+@app.route("/order/<order_no>", methods=["GET"])
+def order(order_no):
+    """Latest WS order update for one order number.
+
+    Exists so a consumer can learn an order's status AND fill quantity without
+    polling REST. single_order_history lags (2026-07-08) and neither it nor
+    get_order_book distinguishes a resting order that is partially filled from
+    one that is untouched — the gap that halted the 2026-09-01 session. The
+    'om' frame carries fillshares directly.
+
+    404 means "no update seen for this order", which is NOT the same as
+    "order does not exist": the socket may have connected after the order was
+    placed, or dropped and reconnected. Callers must treat it as "don't know"
+    and fall back to REST, never as a terminal answer.
+    """
+    if _feed is None:
+        return jsonify({"error": "feed disabled (SHOONYA_FEED_MODE=rest)"}), 409
+    record = _feed.get_order(order_no)
+    if record is None:
+        return jsonify({"error": "no order update cached"}), 404
+    return jsonify(record)
+
+
+@app.route("/orders", methods=["GET"])
+def orders():
+    """Every order update cached this session — operator/debug view."""
+    if _feed is None:
+        return jsonify({"error": "feed disabled (SHOONYA_FEED_MODE=rest)"}), 409
+    return jsonify(_feed.all_orders())
+
+
 @app.route("/subscribe", methods=["POST"])
 def subscribe_instruments():
     data = request.get_json(force=True, silent=True) or {}

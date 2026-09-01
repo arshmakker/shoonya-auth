@@ -214,3 +214,99 @@ def test_backoff_when_capped_then_never_exceeds_60s():
 
 def test_backoff_when_connection_was_healthy_then_resets_to_base():
     assert next_reconnect_delay(uptime_sec=300, prev_delay=32.0) == 1.0
+
+
+# ── Order updates ('om') ─────────────────────────────────────────────────────
+# Regression cover for 2026-09-01: 'om' frames rode this socket and were
+# dropped, so consumers polled REST for order state. A BUY 845 wing filled 650
+# and rested — truthfully non-terminal in single_order_history AND
+# get_order_book, since neither distinguishes a partly-filled resting order
+# from an untouched one. The 45s poll timed out, cancelled into the partial,
+# and halted the session. The 'om' frame carries fillshares directly.
+
+def _ack(transport):
+    transport.fire_text({"t": "ak", "s": "OK"})
+
+
+def test_order_update_is_captured():
+    feed, transport = make_feed()
+    _ack(transport)
+    transport.fire_text(
+        {
+            "t": "om",
+            "norenordno": "26090100361927",
+            "tsym": "NIFTY15SEP26C24900",
+            "status": "OPEN",
+            "rpt": "NewAck",
+            "qty": "845",
+            "fillshares": "650",
+            "trantype": "B",
+        }
+    )
+    rec = feed.get_order("26090100361927")
+    assert rec is not None
+    assert rec["fillshares"] == 650 and rec["qty"] == 845
+    assert rec["tsym"] == "NIFTY15SEP26C24900"
+    assert rec["rpt"] == "NewAck"
+
+
+def test_partial_fill_is_visible_while_status_still_open():
+    """The whole point: status alone cannot tell 650/845 from 0/845."""
+    feed, transport = make_feed()
+    _ack(transport)
+    for filled in ("0", "650"):
+        transport.fire_text(
+            {"t": "om", "norenordno": "X1", "status": "OPEN", "qty": "845", "fillshares": filled}
+        )
+    rec = feed.get_order("X1")
+    assert rec["status"] == "OPEN"
+    assert rec["fillshares"] == 650, "partial fill must be readable without a terminal status"
+
+
+def test_order_updates_merge_rather_than_replace():
+    """Noren emits several frames per order and a later one may omit a field an
+    earlier one carried; overwriting wholesale would lose the fill quantity."""
+    feed, transport = make_feed()
+    _ack(transport)
+    transport.fire_text({"t": "om", "norenordno": "X2", "qty": "845", "fillshares": "650"})
+    transport.fire_text({"t": "om", "norenordno": "X2", "status": "COMPLETE"})
+    rec = feed.get_order("X2")
+    assert rec["status"] == "COMPLETE"
+    assert rec["fillshares"] == 650, "earlier fill quantity must survive a later partial frame"
+
+
+def test_order_update_without_order_number_is_dropped():
+    feed, transport = make_feed()
+    _ack(transport)
+    transport.fire_text({"t": "om", "status": "COMPLETE"})
+    assert feed.all_orders() == {}
+
+
+def test_order_updates_do_not_pollute_the_tick_cache():
+    feed, transport = make_feed()
+    _ack(transport)
+    transport.fire_text({"t": "om", "norenordno": "X3", "status": "COMPLETE"})
+    assert feed.status()["cached_ticks"] == 0
+
+
+def test_unhandled_message_types_are_counted():
+    """The 'om' drop went unnoticed because unknown frames vanished silently."""
+    feed, transport = make_feed()
+    _ack(transport)
+    transport.fire_text({"t": "zz"})
+    transport.fire_text({"t": "zz"})
+    assert feed.status()["unhandled_msg_types"] == {"zz": 2}
+
+
+def test_feed_status_reports_order_counters():
+    feed, transport = make_feed()
+    _ack(transport)
+    transport.fire_text({"t": "om", "norenordno": "X4", "status": "COMPLETE"})
+    st = feed.status()
+    assert st["orders_tracked"] == 1 and st["updates_received"] == 1
+
+
+def test_unknown_order_returns_none():
+    """404 at the proxy means 'no update seen', never 'order does not exist'."""
+    feed, _ = make_feed()
+    assert feed.get_order("nope") is None
