@@ -21,11 +21,34 @@ LOCAL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STAMP="$(date +%Y%m%d)"
 BACKUP_DIR="$LOCAL_ROOT/droplet_backup_$STAMP"
 
+# Hardlink unchanged files against the most recent previous backup instead of
+# re-copying them. Each run pulls the FULL market_data_* history, so without
+# this every backup carried another complete copy — fine at ~3MB/day, but tick
+# persistence took that to ~115MB/day (2026-08-31), so the archive was set to
+# grow quadratically. With --link-dest an unchanged file costs one inode and no
+# blocks; only genuinely new/changed data consumes space. Each backup dir still
+# reads as a complete standalone snapshot.
+PREV_BACKUP=""
+for d in $(ls -d "$LOCAL_ROOT"/droplet_backup_* 2>/dev/null | sort -r); do
+    [ "$d" = "$BACKUP_DIR" ] && continue   # a re-run on the same day
+    [ -d "$d" ] || continue
+    PREV_BACKUP="$d"
+    break
+done
+
+LINK_REGIME=()
+LINK_AUTH=()
+if [ -n "$PREV_BACKUP" ]; then
+    echo "🔗 Hardlinking unchanged files against $(basename "$PREV_BACKUP")"
+    [ -d "$PREV_BACKUP/regimetrader" ] && LINK_REGIME=(--link-dest="$PREV_BACKUP/regimetrader")
+    [ -d "$PREV_BACKUP/shoonya-auth" ] && LINK_AUTH=(--link-dest="$PREV_BACKUP/shoonya-auth")
+fi
+
 echo "📦 Pulling droplet logs/data → $BACKUP_DIR"
 mkdir -p "$BACKUP_DIR/regimetrader" "$BACKUP_DIR/shoonya-auth"
 
 echo "  regimetrader/{logs,data,market_data_*,option_snapshots,docs,ledger_summary.csv}"
-rsync -avz --exclude='venv/' --exclude='symbols/' \
+rsync -avz --exclude='venv/' --exclude='symbols/' "${LINK_REGIME[@]}" \
   "$SSH_HOST:$REMOTE_REGIME/logs" \
   "$SSH_HOST:$REMOTE_REGIME/data" \
   "$SSH_HOST:$REMOTE_REGIME/option_snapshots" \
@@ -33,12 +56,12 @@ rsync -avz --exclude='venv/' --exclude='symbols/' \
   "$SSH_HOST:$REMOTE_REGIME/ledger_summary.csv" \
   "$BACKUP_DIR/regimetrader/" 2>&1 || echo "  ⚠️  some regimetrader paths missing, continuing"
 
-rsync -avz --include='market_data_*/***' --exclude='*' \
+rsync -avz --include='market_data_*/***' --exclude='*' "${LINK_REGIME[@]}" \
   "$SSH_HOST:$REMOTE_REGIME/" "$BACKUP_DIR/regimetrader/" \
   2>&1 || echo "  ⚠️  market_data_*/ pull failed, continuing"
 
 echo "  shoonya-auth/{order_debug.log,.claude,CLAUDE.md,start_vps.sh}"
-rsync -avz \
+rsync -avz "${LINK_AUTH[@]}" \
   "$SSH_HOST:$REMOTE_AUTH/order_debug.log" \
   "$SSH_HOST:$REMOTE_AUTH/.claude" \
   "$SSH_HOST:$REMOTE_AUTH/CLAUDE.md" \
@@ -57,3 +80,12 @@ fi
 
 echo ""
 echo "✅ Backup complete: $BACKUP_DIR"
+echo "   Size as a standalone snapshot: $(du -sh "$BACKUP_DIR" | cut -f1)"
+if [ -n "$PREV_BACKUP" ]; then
+    # Count files carried over as hardlinks rather than trying to compute a
+    # byte delta — du's hardlink accounting differs between GNU and BSD/macOS
+    # and silently gives nonsense when the two dirs are measured separately.
+    LINKED=$(find "$BACKUP_DIR" -type f -links +1 2>/dev/null | wc -l | tr -d ' ')
+    TOTAL=$(find "$BACKUP_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')
+    echo "   $LINKED of $TOTAL files are hardlinks shared with $(basename "$PREV_BACKUP") (no extra disk)"
+fi
