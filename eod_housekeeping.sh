@@ -44,7 +44,14 @@ TRADING_DAY="${TRADING_DAY:-$(date -v-1d +%Y%m%d)}"
 FAILURES=()
 step_failed() { FAILURES+=("$1"); echo "   ❌ $1"; }
 
+# Is this running when it is meant to? The job fires at 00:20; anything in the
+# small hours counts. Used ONLY to decide whether a still-live session is a real
+# fault worth alerting on, or the expected state of an off-schedule manual run.
+HOUR_NOW=$(date +%H)
+if [ "$((10#$HOUR_NOW))" -lt 6 ]; then IN_EOD_WINDOW=1; else IN_EOD_WINDOW=0; fi
+
 echo "🌙 EOD housekeeping for trading day $TRADING_DAY — $(date '+%Y-%m-%d %H:%M:%S %Z')"
+[ "$IN_EOD_WINDOW" = 1 ] || echo "   (off-schedule run — the job is scheduled for 00:20)"
 echo ""
 
 # ── Pre-flight ───────────────────────────────────────────────────────────────
@@ -59,7 +66,22 @@ else
     if ssh "$SSH_HOST" 'pgrep -f "broker_proxy.py|venv/bin/python main.py" >/dev/null' 2>/dev/null; then
         echo "⚠️  Trading processes are STILL RUNNING on $SSH_HOST."
         echo "   Skipping every step — this job must not touch a live session."
-        FAILURES=("session still running at EOD (proxy should have exited 23:58)")
+        if [ "$IN_EOD_WINDOW" = 1 ]; then
+            # Scheduled time, session still up: the 23:58 shutdown genuinely
+            # failed. Worth waking someone for.
+            FAILURES=("session still running at EOD — the 23:58 proxy shutdown did not happen")
+        else
+            # Run by hand outside the window, e.g. mid-session. A live session
+            # is the CORRECT state here, so this is not a failure and must not
+            # page anyone. Alerting on an expected condition is how a channel
+            # gets muted, and a muted channel is worse than no channel.
+            echo ""
+            echo "ℹ️  This was an off-schedule run at $(date '+%H:%M') — the job is"
+            echo "   scheduled for 00:20, after the proxy's 23:58 shutdown."
+            echo "   A live session at this hour is expected, not a fault."
+            echo "   Nothing was done and no alert was sent."
+            exit 2
+        fi
     else
 
         # ── 1. Backup ────────────────────────────────────────────────────────
