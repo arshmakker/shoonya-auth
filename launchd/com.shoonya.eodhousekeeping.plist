@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.shoonya.eodhousekeeping</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/arshdeep/git/trading/shoonya-auth/eod_housekeeping.sh</string>
+    </array>
+
+    <!-- 00:20 IST, Tue-Sat. The job belongs to the trading day that just
+         ENDED, so a Mon-Fri trading night fires on the following calendar
+         day: Mon night = Tue 00:20 (Weekday 2) ... Fri night = Sat 00:20
+         (Weekday 6). The droplet's proxy exits at 23:58, so 00:20 leaves a
+         22-minute margin.
+
+         launchd, not cron, deliberately: this is a laptop that is usually
+         asleep at 00:20, and cron simply skips a job whose time passed while
+         the machine was down. launchd runs it on the next wake instead, which
+         is why eod_housekeeping.sh defaults TRADING_DAY to *yesterday*
+         rather than deriving it from the clock. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>0</integer><key>Minute</key><integer>20</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>0</integer><key>Minute</key><integer>20</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>0</integer><key>Minute</key><integer>20</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>0</integer><key>Minute</key><integer>20</integer></dict>
+        <dict><key>Weekday</key><integer>6</integer><key>Hour</key><integer>0</integer><key>Minute</key><integer>20</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/arshdeep/git/trading/shoonya-auth/logs/eod_housekeeping.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/arshdeep/git/trading/shoonya-auth/logs/eod_housekeeping.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

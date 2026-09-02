@@ -18,7 +18,12 @@ SSH_HOST="droplet"
 REMOTE_REGIME="~/git/trading/regimetrader"
 REMOTE_AUTH="~/git/trading/shoonya-auth"
 LOCAL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-STAMP="$(date +%Y%m%d)"
+# The trading day being archived, not necessarily today. eod_housekeeping.sh
+# runs at 00:20 — after the proxy's 23:58 shutdown, so already the NEXT
+# calendar day — and passes the day that actually just ended. Without the
+# override the archive would be named for a day with no data in it, and the
+# market_data_$STAMP merge below would find nothing and silently skip.
+STAMP="${BACKUP_STAMP:-$(date +%Y%m%d)}"
 BACKUP_DIR="$LOCAL_ROOT/droplet_backup_$STAMP"
 
 # Hardlink unchanged files against the most recent previous backup instead of
