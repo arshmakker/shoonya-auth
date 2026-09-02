@@ -37,6 +37,34 @@ class BrokerClient:
             log.warning("BrokerClient health check failed: %s", exc)
             return False
 
+    def get_ws_order(self, order_no):
+        """Latest WS order-update cache entry for one order (broker_proxy
+        GET /order/<no>), fed by Noren 'om' frames — status AND fillshares
+        together, without a REST round-trip. Not a ShoonyaApiPy method, so it
+        bypasses __getattr__'s POST /call forwarding and hits the proxy's
+        dedicated route directly.
+
+        Returns None on a 404 ("no update seen for this order yet") or any
+        transport error — both mean "don't know", never "order doesn't
+        exist" or "order is REJECTED". Callers must treat None as a reason to
+        fall back to REST, not as a terminal answer.
+        """
+        try:
+            r = requests.get(f"{self._base}/order/{order_no}", timeout=5)
+            if r.status_code == 404:
+                return None
+            if not r.ok:
+                log.warning(
+                    "BrokerClient.get_ws_order proxy error %d: %s",
+                    r.status_code,
+                    r.text[:300],
+                )
+                return None
+            return r.json()
+        except Exception as exc:
+            log.warning("BrokerClient.get_ws_order failed: %s", exc)
+            return None
+
     def __getattr__(self, name: str):
         def _forward(*args, **kwargs):
             payload = {"method": name, "args": list(args), "kwargs": kwargs}
