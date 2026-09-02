@@ -252,23 +252,53 @@ def call_method():
         return jsonify({"error": str(exc)}), 502
 
 
-# Proxy shuts down at 23:58 IST, after the MCX evening session. MCX closes at
-# 23:30, or 23:55 on US daylight-saving days, so this clears both while staying
-# on the same calendar day.
+# When the proxy ends its day (IST), as HH:MM in SHOONYA_SHUTDOWN_TIME.
 #
-# It used to be 15:40 — a clean buffer past the 15:30 NSE close, which was all
-# that mattered while the droplet was powered off each afternoon. The box now
-# stays up (powering a DO droplet off does not stop the bill), so the proxy is
-# the only thing that was ending the day early and taking the MCX feed with it.
-# tick_persist gates its heartbeat per exchange, so the NSE/NFO instruments go
-# quiet at their own close rather than repeating a dead quote until 23:58.
-_PROXY_SHUTDOWN_TIME = (23, 58)
+# The default is 15:40 — a clean buffer past the 15:30 NSE close, which is all a
+# session that only trades NSE/NFO needs. start.sh (Mac) is exactly that: it
+# passes no SHOONYA_TICK_PERSIST_DIR and subscribes no MCX instruments, so after
+# 15:40 nothing consumes the feed and the only thing an open proxy achieves is
+# holding a live authenticated broker session for another eight hours.
+#
+# start_vps.sh overrides it to 23:58, because the droplet DOES capture MCX. MCX
+# closes 23:30, or 23:55 on US daylight-saving days, so 23:58 clears both while
+# staying on the same calendar day. That override used to be this constant's
+# hardcoded value, which silently imposed the droplet's MCX tail on every local
+# run too.
+#
+# Note tick_persist._SESSION_END stays hardcoded and is deliberately NOT coupled
+# to this. Its per-exchange windows bound how long a frozen quote may keep
+# emitting heartbeat rows; a window wider than the shutdown time simply never
+# gets reached. Narrowing them to match would be a behaviour change, not a fix.
+_DEFAULT_SHUTDOWN_TIME = "15:40"
 
 
-def _market_close_watchdog() -> None:
+def _resolve_shutdown_time(raw: str | None) -> tuple[int, int]:
+    """Parse SHOONYA_SHUTDOWN_TIME ("HH:MM", IST) into (hour, minute).
+
+    A malformed value is fatal rather than falling back to the default. The
+    default is 15:40, so a typo in start_vps.sh would otherwise end the
+    droplet's day eight hours early and take the entire MCX evening with it —
+    unrecoverable data, and invisible until someone reads the tick files. A
+    refusal to boot is noisy and fixable in a minute; the quiet 15:40 is not.
+    """
+    raw = (raw or "").strip() or _DEFAULT_SHUTDOWN_TIME
+    try:
+        hh, mm = raw.split(":")
+        hour, minute = int(hh), int(mm)
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError(raw)
+    except ValueError:
+        raise SystemExit(
+            f"SHOONYA_SHUTDOWN_TIME must be HH:MM on a 24-hour clock (IST); got {raw!r}"
+        )
+    return hour, minute
+
+
+def _market_close_watchdog(shutdown_time: tuple[int, int]) -> None:
     """Background thread: sleep until the shutdown time (IST), then exit."""
     now = datetime.now(_IST)
-    h, m = _PROXY_SHUTDOWN_TIME
+    h, m = shutdown_time
     target = now.replace(hour=h, minute=m, second=0, microsecond=0)
     if now.weekday() >= 5:
         return  # weekend — don't auto-exit
@@ -291,6 +321,21 @@ if __name__ == "__main__":
         help="Path to cred.yml containing a valid Access_token",
     )
     args = parser.parse_args()
+
+    # Resolved BEFORE _init_api, so a malformed SHOONYA_SHUTDOWN_TIME fails in
+    # milliseconds rather than after a ~30s Selenium OAuth round-trip.
+    #
+    # The log line reports the value AND its source. The 2026-08-21 paper/live
+    # incident turned on exactly this: a setting the operator believed one thing
+    # about while the process ran another, with nothing in the log to contradict
+    # them. "15:40 (default)" vs "23:58 (SHOONYA_SHUTDOWN_TIME)" is unambiguous.
+    _shutdown_raw = os.environ.get("SHOONYA_SHUTDOWN_TIME")
+    shutdown_time = _resolve_shutdown_time(_shutdown_raw)
+    log.info(
+        "Session-close time: %02d:%02d IST (%s)",
+        *shutdown_time,
+        "SHOONYA_SHUTDOWN_TIME" if (_shutdown_raw or "").strip() else "default",
+    )
 
     _api, ws_access_token, ws_uid = _init_api(args.cred_file)
 
@@ -331,7 +376,12 @@ if __name__ == "__main__":
                 interval,
             )
 
-    t = threading.Thread(target=_market_close_watchdog, daemon=True, name="market-close-watchdog")
+    t = threading.Thread(
+        target=_market_close_watchdog,
+        args=(shutdown_time,),
+        daemon=True,
+        name="market-close-watchdog",
+    )
     t.start()
 
     # threaded=True: Flask handles concurrent requests in separate threads.

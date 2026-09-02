@@ -58,7 +58,15 @@ tmux set-option -t "$SESSION" pane-border-format " #{pane_title} "
 # rows are written on quote CHANGE with a 60s heartbeat rather than every pass —
 # writing all of them every 5s would be ~920k rows/day, mostly identical repeats
 # of far-OTM strikes that never requote. See tick_persist.py.
-tmux send-keys -t "$SESSION:proxy" "cd $DIR && SHOONYA_FEED_MODE=hybrid SHOONYA_TICK_PERSIST_DIR='$REGIME_DIR' ./venv/bin/python broker_proxy.py" Enter
+# SHOONYA_SHUTDOWN_TIME=23:58 keeps the proxy up for the MCX evening session
+# (MCX closes 23:30, or 23:55 on US daylight-saving days). It belongs HERE and
+# not in broker_proxy.py's default, because it is a property of this deployment
+# — the droplet captures MCX, the Mac's start.sh does not. broker_proxy.py
+# defaults to 15:40, a buffer past the NSE close; see the comment on
+# _DEFAULT_SHUTDOWN_TIME there. A malformed value is fatal at startup by design,
+# so the proxy will refuse to boot rather than quietly end the day at 15:40 and
+# lose the whole commodity evening.
+tmux send-keys -t "$SESSION:proxy" "cd $DIR && SHOONYA_FEED_MODE=hybrid SHOONYA_SHUTDOWN_TIME=23:58 SHOONYA_TICK_PERSIST_DIR='$REGIME_DIR' ./venv/bin/python broker_proxy.py" Enter
 tmux select-pane -t "$SESSION:proxy.0" -T "🔌 broker_proxy"
 
 # Wait up to 90s for proxy to be healthy
