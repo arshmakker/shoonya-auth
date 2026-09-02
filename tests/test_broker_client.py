@@ -58,3 +58,52 @@ class TestGetWsOrder:
             client.get_ws_order("X5")
         mock_get.assert_called_once()
         mock_post.assert_not_called()
+
+
+class TestWsSubscribe:
+    """BrokerClient.ws_subscribe — POST to broker_proxy's dedicated /subscribe
+    route. Like get_ws_order it bypasses __getattr__'s POST /call forwarding,
+    so it needs its own coverage.
+
+    Why it exists: a leg with no WS coverage is served by the proxy's REST
+    fallback, and Shoonya's get_quotes returns the underlying SPOT in `lp` for
+    option tokens (~50/day). Subscribing an open position's legs moves them
+    onto the clean feed. It is an optimisation, never a precondition — so every
+    failure path must return False rather than raise into a caller that has
+    already filled an order.
+    """
+
+    def test_posts_instruments_to_subscribe_route(self):
+        client = BrokerClient("http://127.0.0.1:7890")
+        payload = {"ok": True, "subscriptions": ["NFO|47281", "NFO|47282"]}
+        with patch("requests.post", return_value=_mock_response(200, payload)) as mock_post:
+            assert client.ws_subscribe(["NFO|47281", "NFO|47282"]) is True
+        args, kwargs = mock_post.call_args
+        assert args[0] == "http://127.0.0.1:7890/subscribe"
+        assert kwargs["json"] == {"instruments": ["NFO|47281", "NFO|47282"]}
+
+    def test_rejects_empty_and_malformed_without_a_round_trip(self):
+        client = BrokerClient("http://127.0.0.1:7890")
+        with patch("requests.post") as mock_post:
+            assert client.ws_subscribe([]) is False
+            assert client.ws_subscribe(None) is False
+            assert client.ws_subscribe(["no-pipe-here"]) is False
+            assert client.ws_subscribe([None, 42]) is False
+            mock_post.assert_not_called()
+
+    def test_feed_disabled_409_returns_false(self):
+        """SHOONYA_FEED_MODE=rest — an expected configuration, not a crash."""
+        client = BrokerClient("http://127.0.0.1:7890")
+        with patch("requests.post", return_value=_mock_response(409, {"error": "feed disabled"})):
+            assert client.ws_subscribe(["NFO|47281"]) is False
+
+    def test_transport_failure_returns_false(self):
+        client = BrokerClient("http://127.0.0.1:7890")
+        with patch("requests.post", side_effect=OSError("connection refused")):
+            assert client.ws_subscribe(["NFO|47281"]) is False
+
+    def test_filters_malformed_entries_but_sends_the_valid_ones(self):
+        client = BrokerClient("http://127.0.0.1:7890")
+        with patch("requests.post", return_value=_mock_response(200, {"ok": True})) as mock_post:
+            assert client.ws_subscribe(["NFO|47281", "bad", None]) is True
+        assert mock_post.call_args[1]["json"] == {"instruments": ["NFO|47281"]}

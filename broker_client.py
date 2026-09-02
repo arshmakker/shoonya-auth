@@ -65,6 +65,50 @@ class BrokerClient:
             log.warning("BrokerClient.get_ws_order failed: %s", exc)
             return None
 
+    def ws_subscribe(self, instruments) -> bool:
+        """Add instruments to the proxy's WebSocket feed (POST /subscribe).
+
+        `instruments` are "EXCHANGE|TOKEN" strings. Subscribing is idempotent,
+        so re-sending a live instrument is harmless.
+
+        Why a caller would want this: the proxy's REST fallback inherits a
+        Shoonya defect where get_quotes returns the UNDERLYING SPOT in the
+        `lp` field for an option token (see the FixQ1 note in regimetrader's
+        market_data.py). The WS feed does not have that defect — on 2026-09-02
+        two WS-subscribed IC legs logged 7,434 clean ticks and zero bad values,
+        while the two legs that fell through to REST took 150 corruptions in
+        the same session. So anything holding a position wants its legs on the
+        WS feed, not merely whatever the boot-time chain subscribe happened to
+        cover.
+
+        Not a ShoonyaApiPy method, so it bypasses __getattr__'s POST /call
+        forwarding and hits the dedicated route directly. Returns True on
+        success, False on any failure — subscribing is an optimisation, never
+        a precondition, so callers must not treat False as fatal.
+        """
+        instruments = [i for i in (instruments or []) if isinstance(i, str) and "|" in i]
+        if not instruments:
+            return False
+        try:
+            r = requests.post(
+                f"{self._base}/subscribe",
+                json={"instruments": instruments},
+                timeout=5,
+            )
+            if not r.ok:
+                # 409 = SHOONYA_FEED_MODE=rest, i.e. no feed to subscribe to.
+                # Expected in that configuration, not an error worth shouting about.
+                log.warning(
+                    "BrokerClient.ws_subscribe proxy error %d: %s",
+                    r.status_code,
+                    r.text[:300],
+                )
+                return False
+            return bool(r.json().get("ok"))
+        except Exception as exc:
+            log.warning("BrokerClient.ws_subscribe failed: %s", exc)
+            return False
+
     def __getattr__(self, name: str):
         def _forward(*args, **kwargs):
             payload = {"method": name, "args": list(args), "kwargs": kwargs}
