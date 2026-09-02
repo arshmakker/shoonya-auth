@@ -45,7 +45,22 @@ ssh "$SSH_HOST" "
     fi
     git pull origin $BRANCH
     if [ \"\$STASHED\" = 1 ]; then
-        git stash pop
+        # A conflicting pop leaves the tree in UU with conflict markers. That
+        # matters more here than in a normal repo: the very next step executes
+        # start_vps.sh, and markers in a shell script are a bash syntax error.
+        # set -e would abort before that — but it would abort leaving the tree
+        # broken, so the retry AND the 'start manually' hint below both fail
+        # confusingly. Reset to the pulled code instead. The stash is preserved
+        # on a conflicted pop, so the local edit is recoverable, not discarded.
+        if ! git stash pop; then
+            echo ''
+            echo '   ⚠️  Local changes conflict with the pulled commit.'
+            git reset -q --hard HEAD
+            echo '   Tree reset to the pulled code (clean and runnable).'
+            echo '   Your edit is SAFE in the stash — recover it with:'
+            echo '       ssh droplet \"cd $REMOTE_DIR && git stash show -p stash@{0}\"'
+            exit 1
+        fi
     fi
     echo \"   now at: \$(git log --oneline -1)\"
 "
