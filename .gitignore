@@ -64,3 +64,6 @@ droplet_backup_*/
 
 # Local-only deploy tooling (machine-specific ssh host aliases/paths, not shared)
 deploy_regimetrader.sh
+
+# Analysis output from tools/fetch_leg_timeseries.py (regenerable)
+leg_series/
