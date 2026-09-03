@@ -28,6 +28,32 @@ if grep -q "YOUR_USER_ID\|YOUR_CLIENT_ID\|YOUR_64_CHAR" "$CRED_FILE"; then
     exit 1
 fi
 
+# Symbol master staleness guard.
+#
+# refresh_symbols.sh is a manual "run on the 1st of each month" step, and on
+# 2026-09-03 that was found to have drifted: the Mac had run it on 09-01 but the
+# droplet — the box that actually trades — was still on 08-24 masters, nine days
+# stale, with 22-SEP short 4 NIFTY strikes. Nothing scheduled it and nothing
+# reported its absence, so the gap was silent. A monthly cron now covers the
+# normal case; this guard is the self-healing backstop for when that cron is
+# missed, disabled, or the box was off on the 1st.
+#
+# Deliberately NON-FATAL despite `set -e`: refresh_symbols.sh exits 1 if a
+# download fails, and a Shoonya CDN blip must not be the reason the session
+# refuses to start. Stale masters still trade; no session does not. Hence the
+# `|| echo` on every call.
+SYMBOL_FILE="$REGIME_DIR/symbols/NFO.csv"
+SYMBOL_MAX_AGE_DAYS=7
+if [ ! -f "$SYMBOL_FILE" ]; then
+    echo "⚠️  $SYMBOL_FILE missing — refreshing symbol masters..."
+    "$DIR/refresh_symbols.sh" || echo "⚠️  Symbol refresh FAILED — continuing on whatever is on disk."
+elif [ -n "$(find "$SYMBOL_FILE" -mtime "+$SYMBOL_MAX_AGE_DAYS" -print -quit 2>/dev/null)" ]; then
+    echo "⚠️  Symbol masters older than ${SYMBOL_MAX_AGE_DAYS}d — refreshing..."
+    "$DIR/refresh_symbols.sh" || echo "⚠️  Symbol refresh FAILED — continuing on whatever is on disk."
+else
+    echo "✅ Symbol masters fresh (< ${SYMBOL_MAX_AGE_DAYS}d old)."
+fi
+
 # Kill any stale session from a previous run
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
