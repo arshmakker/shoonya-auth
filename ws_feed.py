@@ -61,6 +61,7 @@ class WSFeedManager:
     def __init__(self, access_token, uid, default_max_age_sec=10.0, transport_factory=None):
         self._store = TickStore()
         self._orders = OrderStore()
+        self._uid = uid
         # Per-type tally of frames this feed does not consume. The 'om' drop
         # went unnoticed for months because unknown types vanished silently;
         # counting them makes the next one self-reporting.
@@ -134,6 +135,11 @@ class WSFeedManager:
         if snapshot:
             log.info("ack OK — subscribing %d instruments", len(snapshot))
             self._send_touchline("t", snapshot)
+        # Order updates ('om') require this explicit subscription — the broker
+        # never pushes them just because the socket is authenticated. Must be
+        # re-sent on every reconnect, same as the touchline subscriptions above.
+        self._transport.send(json.dumps({"t": "o", "actid": self._uid}))
+        log.info("ack OK — subscribed to order updates (actid=%s)", self._uid)
 
     def _on_raw(self, msg):
         t = msg.get("t")

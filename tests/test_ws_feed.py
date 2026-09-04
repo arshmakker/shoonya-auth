@@ -83,14 +83,28 @@ def test_ack_ok_when_received_then_connected_and_subscriptions_resent():
     transport.fire_text({"t": "ak", "s": "OK", "uid": "U1"})
 
     assert feed.status()["connected"] is True
-    assert len(transport.sent) == 1
+    assert len(transport.sent) == 2, "one touchline resubscribe + one order-update subscribe"
     sent = json.loads(transport.sent[0])
     assert sent["t"] == "t"
     assert sorted(sent["k"].split("#")) == ["NFO|12345", "NSE|26000"]
+    order_sub = json.loads(transport.sent[1])
+    assert order_sub == {"t": "o", "actid": "U1"}
+
+
+def test_order_subscribe_when_acked_and_no_instruments_then_still_sent():
+    """Order-update subscription must not depend on there being a touchline
+    subscription — an account with only exit orders in flight still needs it."""
+    feed, transport = make_feed()
+    feed.start()
+    transport.fire_open()
+    transport.fire_text({"t": "ak", "s": "OK"})
+
+    assert transport.sent == [json.dumps({"t": "o", "actid": "U1"})]
 
 
 def test_resubscribe_when_reconnected_and_acked_then_subscriptions_resent_again():
-    """A fresh ack after any reconnect must restore the full subscription set."""
+    """A fresh ack after any reconnect must restore the full subscription set,
+    including re-arming the order-update subscription."""
     feed, transport = make_feed()
     feed.start()
     feed.subscribe(["NSE|26000"])
@@ -102,8 +116,9 @@ def test_resubscribe_when_reconnected_and_acked_then_subscriptions_resent_again(
 
     assert feed.status()["connected"] is True
     kinds = [json.loads(s)["t"] for s in transport.sent]
-    assert kinds == ["t", "t"], "one full subscribe per ack cycle"
-    assert json.loads(transport.sent[-1])["k"] == "NSE|26000"
+    assert kinds == ["t", "o", "t", "o"], "one full subscribe + order re-arm per ack cycle"
+    touchline_sent = [json.loads(s) for s in transport.sent if json.loads(s)["t"] == "t"]
+    assert touchline_sent[-1]["k"] == "NSE|26000"
 
 
 def test_ack_not_ok_when_received_then_error_recorded_stays_disconnected():
@@ -143,7 +158,8 @@ def test_unsubscribe_when_acked_then_forwarded_and_removed_from_set():
     transport.fire_close()
     transport.fire_open()
     transport.fire_text({"t": "ak", "s": "OK"})
-    assert json.loads(transport.sent[-1])["k"] == "NFO|12345"
+    touchline_sent = [json.loads(s) for s in transport.sent if json.loads(s)["t"] == "t"]
+    assert touchline_sent[-1]["k"] == "NFO|12345"
 
 
 # ── Tick routing ─────────────────────────────────────────────────────────────
