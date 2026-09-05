@@ -67,3 +67,8 @@ deploy_regimetrader.sh
 
 # Analysis output from tools/fetch_leg_timeseries.py (regenerable)
 leg_series/
+
+# Decrypted Shoonya contract notes / margin / ledger statements — PAN-unlocked,
+# contain account financials. Never commit; see tools/decrypt_shoonya_pdfs.py
+# and project memory reference_shoonya_statements.md
+contract_notes/
