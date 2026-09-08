@@ -104,7 +104,7 @@ def _init_api(cred_file: str) -> ShoonyaApiPy:
     return api, str(creds.get("Access_token") or "").strip(), uid
 
 
-def _raw_position_book(api: ShoonyaApiPy) -> dict:
+def _raw_position_book(api: ShoonyaApiPy) -> dict | list:
     """Re-issue PositionBook directly, bypassing NorenApi.get_positions()'s
     collapsing of any non-list response to None. Needed to tell a genuinely
     flat account ({"stat":"Not_Ok","emsg":"...no data..."}) apart from a
@@ -228,8 +228,12 @@ def call_method():
             # Also write to file — werkzeug flood scrolls stdout
             import json as _json, datetime as _dt
             _order_log = os.path.expanduser("~/git/trading/shoonya-auth/order_debug.log")
-            with open(_order_log, "a") as _f:
-                _f.write(f"{_dt.datetime.now().isoformat()} place_order kwargs={_json.dumps(kwargs)} result={_json.dumps(result)}\n")
+            # A local logging failure must not discard a broker acknowledgment.
+            try:
+                with open(_order_log, "a") as _f:
+                    _f.write(f"{_dt.datetime.now().isoformat()} place_order kwargs={_json.dumps(kwargs)} result={_json.dumps(result)}\n")
+            except OSError:
+                log.warning("Order debug log write failed", exc_info=True)
         if method_name == "get_positions" and result is None:
             # A flat account and a real broker error both collapse to None
             # here (see _raw_position_book docstring) — recover the raw
@@ -239,6 +243,8 @@ def call_method():
             except Exception as exc:
                 log.error("Proxy get_positions raw re-check failed: %s", exc, exc_info=True)
                 return jsonify({"error": f"positions re-check failed: {exc}"}), 502
+            if isinstance(raw, list):
+                return jsonify(raw), 200
             if isinstance(raw, dict) and "no data" in str(raw.get("emsg", "")).lower():
                 return jsonify([]), 200
             emsg = raw.get("emsg") if isinstance(raw, dict) else "malformed positions response"
