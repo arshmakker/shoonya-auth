@@ -73,7 +73,8 @@ class WSFeedManager:
         self._last_error = None
         self._default_max_age_sec = default_max_age_sec
         factory = transport_factory or (
-            lambda: WsClient(access_token=access_token, uid=uid, on_message=self._on_raw)
+            lambda: WsClient(access_token=access_token, uid=uid, on_message=self._on_raw,
+                             on_disconnect=self._on_disconnect)
         )
         self._transport = factory()
 
@@ -82,7 +83,11 @@ class WSFeedManager:
         log.info("WS feed manager started")
 
     def stop(self):
+        self._on_disconnect()
         self._transport.close()
+
+    def _on_disconnect(self):
+        self._connected = False
 
     def subscribe(self, instruments):
         with self._lock:
@@ -149,6 +154,7 @@ class WSFeedManager:
                 self._last_error = None
                 self._resubscribe_all()
             else:
+                self._connected = False
                 self._last_error = f"auth ack rejected: {msg}"
                 log.error(self._last_error)
             return

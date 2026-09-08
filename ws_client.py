@@ -30,7 +30,8 @@ def next_reconnect_delay(uptime_sec, prev_delay, base=RECONNECT_DELAY_SEC, cap=M
 
 
 class WsClient:
-    def __init__(self, access_token, uid, on_message, reconnect_delay=RECONNECT_DELAY_SEC):
+    def __init__(self, access_token, uid, on_message, reconnect_delay=RECONNECT_DELAY_SEC,
+                 on_disconnect=None):
         self._handshake = {
             "t": "a",
             "uid": uid,
@@ -39,6 +40,7 @@ class WsClient:
             "source": "API",
         }
         self._on_message = on_message
+        self._on_disconnect = on_disconnect
         self._reconnect_delay = reconnect_delay
         self._ws = None
         self._stop_event = threading.Event()
@@ -84,6 +86,10 @@ class WsClient:
                 self._ws.run_forever(ping_interval=3, ping_payload=json.dumps({"t": "h"}))
             except Exception as exc:
                 log.error("websocket loop error: %s", exc)
+            finally:
+                # Also cover exits where the transport never calls on_close.
+                if self._on_disconnect is not None:
+                    self._on_disconnect()
             uptime = time.monotonic() - started_at
             if not self._stop_event.is_set():
                 log.warning(
@@ -106,4 +112,6 @@ class WsClient:
         log.error("ws error: %s", error)
 
     def _on_close(self, ws, close_status_code, close_msg):
+        if self._on_disconnect is not None:
+            self._on_disconnect()
         log.warning("ws closed (%s)", close_status_code)
