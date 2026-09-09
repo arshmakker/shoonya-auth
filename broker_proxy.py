@@ -232,10 +232,16 @@ def call_method():
             _feed, method_name, args, kwargs, max_age_sec=_QUOTE_CACHE_MAX_AGE_SEC
         )
         if cached is not CACHE_MISS:
+            # Tag the source so a caller can log WS-vs-REST provenance instead
+            # of guessing after the fact (2026-09-09 trail-stop investigation
+            # had no way to confirm which source fed a given monitor cycle).
+            cached["_src"] = "ws"
             return jsonify(cached), 200
 
     try:
         result = method(*args, **kwargs)
+        if method_name in QUOTE_METHODS and isinstance(result, dict):
+            result["_src"] = "rest"
         # ShoonyaApiPy methods return dicts, lists, or None.
         if method_name == "place_order":
             log.info("DEBUG place_order kwargs=%s → result=%s", kwargs, result)
