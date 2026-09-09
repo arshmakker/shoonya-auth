@@ -122,6 +122,20 @@ def _raw_position_book(api: ShoonyaApiPy) -> dict | list:
     return json.loads(res.text)
 
 
+def _raw_order_book(api: ShoonyaApiPy) -> dict | list:
+    """Recover the OrderBook response that the SDK collapses to None.
+
+    An empty book and a failed broker query must remain distinguishable so
+    callers can safely reconcile orders before resetting daily risk state.
+    """
+    config = api._NorenApi__service_config
+    url = f"{config['host']}{config['routes']['orderbook']}"
+    payload = "jData=" + json.dumps({"ordersource": "API", "uid": api._NorenApi__username})
+    res = requests.post(url, data=payload, headers=api._NorenApi__OAuthHeaders, timeout=15)
+    res.raise_for_status()
+    return json.loads(res.text)
+
+
 @app.route("/health", methods=["GET"])
 def health():
     ok = _api is not None and _api.validate_oauth_session()
@@ -249,6 +263,23 @@ def call_method():
                 return jsonify([]), 200
             emsg = raw.get("emsg") if isinstance(raw, dict) else "malformed positions response"
             log.error("Proxy get_positions: broker reported error: %s", emsg)
+            return jsonify({"error": emsg}), 502
+        if method_name == "get_order_book" and result is None:
+            try:
+                raw = _raw_order_book(_api)
+            except Exception as exc:
+                log.error("Proxy get_order_book raw re-check failed: %s", exc, exc_info=True)
+                return jsonify({"error": f"order book re-check failed: {exc}"}), 502
+            if isinstance(raw, list):
+                return jsonify(raw), 200
+            # Match only known empty-book responses, never a generic None or
+            # an arbitrary error containing the words "no data".
+            if isinstance(raw, dict) and raw.get("stat") == "Not_Ok" and str(raw.get("emsg", "")).strip().lower() in {
+                "no data", 'error occurred : 5 "no data"',
+            }:
+                return jsonify([]), 200
+            emsg = (raw.get("emsg") if isinstance(raw, dict) else None) or "malformed order book response"
+            log.error("Proxy get_order_book: broker reported error: %s", emsg)
             return jsonify({"error": emsg}), 502
         if result is None:
             return jsonify(None), 200
