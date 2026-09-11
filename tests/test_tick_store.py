@@ -92,6 +92,52 @@ def test_get_when_lp_stale_but_depth_fresh_then_lp_dropped_not_whole_record():
     assert quote["sp1"] == 100.5
 
 
+def test_get_when_oi_stale_but_key_present_then_oi_still_returned():
+    """Regression (2026-09-11): oi is cumulative — it only changes when a
+    trade prints, so a perfectly liquid but momentarily quiet strike can go
+    minutes without a fresh oi tick. Age-filtering it like lp/bp1/sp1 makes
+    quote.get("oi", 0) read 0 for a liquid strike, which iron_condor.py's
+    _leg_illiquid() (book.oi < IC_MIN_ENTRY_OI) then wrongly rejects as
+    illiquid. oi/v/o/pc must survive the freshness filter that lp/bp1/sp1/
+    bq1/sq1 are subject to."""
+    store = TickStore()
+    store.update("NSE|1", {"lp": 100.0, "oi": 50000, "v": 12345, "o": 99.0, "pc": -0.5})
+    store._received_at["NSE|1"]["oi"] -= 60.0
+    store._received_at["NSE|1"]["v"] -= 60.0
+    store._received_at["NSE|1"]["o"] -= 60.0
+    store._received_at["NSE|1"]["pc"] -= 60.0
+    store.update("NSE|1", {"lp": 100.5})  # keeps lp itself fresh
+
+    quote = store.get("NSE|1", max_age_sec=5.0)
+    assert quote is not None
+    assert quote["oi"] == 50000, "stale oi must still be served, not dropped"
+    assert quote["v"] == 12345
+    assert quote["o"] == 99.0
+    assert quote["pc"] == -0.5
+    assert quote["lp"] == 100.5
+
+
+def test_get_when_price_fields_stale_then_still_dropped_despite_oi_exemption():
+    """oi/v/o/pc are exempt from the age filter, but lp/bp1/sp1/bq1/sq1 must
+    remain subject to it — the exemption must not widen to the whole quote."""
+    store = TickStore()
+    store.update("NSE|1", {"lp": 100.0, "bp1": 99.9, "sp1": 100.1, "bq1": 5, "sq1": 7, "oi": 50000})
+    store._received_at["NSE|1"]["lp"] -= 60.0
+    store._received_at["NSE|1"]["bp1"] -= 60.0
+    store._received_at["NSE|1"]["sp1"] -= 60.0
+    store._received_at["NSE|1"]["bq1"] -= 60.0
+    store._received_at["NSE|1"]["sq1"] -= 60.0
+
+    quote = store.get("NSE|1", max_age_sec=5.0)
+    assert quote is not None
+    assert "lp" not in quote
+    assert "bp1" not in quote
+    assert "sp1" not in quote
+    assert "bq1" not in quote
+    assert "sq1" not in quote
+    assert quote["oi"] == 50000
+
+
 def test_get_when_within_max_age_then_fresh_returns_quote():
     store = TickStore()
     store.update("NSE|1", {"lp": 10.0})

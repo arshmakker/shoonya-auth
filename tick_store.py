@@ -26,6 +26,15 @@ _NUMERIC_FIELDS = {
 # tell a fresh quote from a stale cache entry.
 _PASSTHROUGH_FIELDS = ("ts", "e", "tk", "ft")
 
+# Only these move fast enough that a max_age_sec check is meaningful. oi/v/o/
+# pc are cumulative/session stats that only change when a trade prints — a
+# perfectly liquid but momentarily quiet strike can go minutes between oi
+# updates, so age-filtering it the same as lp/bp1/sp1 turns a live strike
+# into quote.get("oi", 0) == 0 downstream (iron_condor.py's _leg_illiquid
+# wrongly rejects it as illiquid, 2026-09-11). Passthrough fields (ts/e/tk/
+# ft) are identity metadata, never staleness-gated either.
+_AGE_FILTERED_FIELDS = frozenset({"lp", "bp1", "sp1", "bq1", "sq1"})
+
 
 class TickStore:
     def __init__(self):
@@ -83,7 +92,7 @@ class TickStore:
             fresh = {
                 field: value
                 for field, value in quote.items()
-                if now - stamps.get(field, 0.0) <= max_age_sec
+                if field not in _AGE_FILTERED_FIELDS or now - stamps.get(field, 0.0) <= max_age_sec
             }
             return fresh or None
 
