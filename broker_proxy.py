@@ -386,7 +386,13 @@ if __name__ == "__main__":
     if feed_mode == "rest":
         log.info("SHOONYA_FEED_MODE=rest — WebSocket feed disabled")
     else:
-        _feed = WSFeedManager(access_token=ws_access_token, uid=ws_uid)
+        subscribe_persist_path = os.path.expanduser(
+            os.environ.get("SHOONYA_WS_SUBSCRIBE_PERSIST", "~/.shoonya/ws_subscriptions.json").strip()
+            or "~/.shoonya/ws_subscriptions.json"
+        )
+        _feed = WSFeedManager(
+            access_token=ws_access_token, uid=ws_uid, subscribe_persist_path=subscribe_persist_path,
+        )
         _feed.start()
         auto_subscribe = parse_instruments_spec(os.environ.get("SHOONYA_WS_SUBSCRIBE", ""))
         if auto_subscribe:

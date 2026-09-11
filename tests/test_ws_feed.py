@@ -207,6 +207,70 @@ def test_get_quote_when_unknown_symbol_then_none():
     assert feed.get_quote("NSE", "404") is None
 
 
+# ── Subscription persistence across a process restart ────────────────────────
+# Regression (2026-09-11): _subscriptions lives only in memory, so a proxy
+# process restart wiped it with nothing to tell any caller — every subscriber
+# fires /subscribe once at its own startup and never again, so the WS cache
+# silently went cold for the rest of the session. Persisting to disk on every
+# change and reloading before start() means a fresh process resubscribes on
+# its own, on the very first ack, with no caller cooperation required.
+
+def test_subscribe_when_persist_path_set_then_snapshot_written(tmp_path):
+    path = str(tmp_path / "subs.json")
+    transport = FakeTransport()
+    feed = WSFeedManager(
+        access_token="tok", uid="U1", transport_factory=lambda: transport,
+        subscribe_persist_path=path,
+    )
+    transport.on_message = feed._on_raw
+    feed.subscribe(["NFO|1", "NSE|2"])
+
+    saved = json.loads(open(path).read())
+    assert saved == ["NFO|1", "NSE|2"]
+
+
+def test_unsubscribe_when_persist_path_set_then_snapshot_updated(tmp_path):
+    path = str(tmp_path / "subs.json")
+    transport = FakeTransport()
+    feed = WSFeedManager(
+        access_token="tok", uid="U1", transport_factory=lambda: transport,
+        subscribe_persist_path=path,
+    )
+    transport.on_message = feed._on_raw
+    feed.subscribe(["NFO|1", "NSE|2"])
+    feed.unsubscribe(["NFO|1"])
+
+    assert json.loads(open(path).read()) == ["NSE|2"]
+
+
+def test_new_feed_when_persisted_file_exists_then_resubscribes_on_first_ack(tmp_path):
+    path = str(tmp_path / "subs.json")
+    path_obj = tmp_path / "subs.json"
+    path_obj.write_text(json.dumps(["MCX|9", "NFO|1"]))
+
+    transport = FakeTransport()
+    feed = WSFeedManager(
+        access_token="tok", uid="U2", transport_factory=lambda: transport,
+        subscribe_persist_path=path,
+    )
+    transport.on_message = feed._on_raw
+    feed.start()
+
+    assert transport.sent == [], "nothing sent before the broker acks"
+    transport.fire_text({"t": "ak", "s": "OK"})
+
+    touchline_frames = [json.loads(m) for m in transport.sent if json.loads(m).get("t") == "t"]
+    assert len(touchline_frames) == 1
+    assert touchline_frames[0]["k"] == "MCX|9#NFO|1"
+
+
+def test_new_feed_when_no_persisted_file_then_starts_with_empty_subscriptions(tmp_path):
+    path = str(tmp_path / "missing.json")
+    feed, transport = make_feed()
+    feed._subscribe_persist_path = path  # exercise the loader without a file present
+    assert feed._load_persisted_subscriptions() == set()
+
+
 # ── Status surface ───────────────────────────────────────────────────────────
 
 def test_status_when_acked_then_reports_health():

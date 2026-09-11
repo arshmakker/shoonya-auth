@@ -17,6 +17,7 @@ can never again be invisible.
 
 import json
 import logging
+import os
 import threading
 import time
 
@@ -58,7 +59,8 @@ def parse_instruments_spec(raw):
 
 
 class WSFeedManager:
-    def __init__(self, access_token, uid, default_max_age_sec=10.0, transport_factory=None):
+    def __init__(self, access_token, uid, default_max_age_sec=10.0, transport_factory=None,
+                 subscribe_persist_path=None):
         self._store = TickStore()
         self._orders = OrderStore()
         self._uid = uid
@@ -68,6 +70,17 @@ class WSFeedManager:
         self._unhandled_types = {}
         self._subscriptions = set()
         self._lock = threading.Lock()
+        # A process restart wipes _subscriptions with nothing to tell any
+        # caller it happened — every subscriber (boot-time scripts, a
+        # DataCollector) fires its /subscribe once and never again, so the
+        # WS cache silently goes empty for the rest of the session (hit
+        # 2026-09-11: a mid-session broker_proxy restart needed a manual
+        # /subscribe replay to recover). Loading the last-known set here,
+        # before start(), means _resubscribe_all() sends it on the very
+        # first ack — no caller cooperation required.
+        self._subscribe_persist_path = subscribe_persist_path
+        if self._subscribe_persist_path:
+            self._subscriptions = self._load_persisted_subscriptions()
         self._connected = False
         self._last_msg_monotonic = None
         self._last_error = None
@@ -94,12 +107,46 @@ class WSFeedManager:
             self._subscriptions.update(instruments)
         if self._connected:
             self._send_touchline("t", list(instruments))
+        self._persist_subscriptions()
 
     def unsubscribe(self, instruments):
         with self._lock:
             self._subscriptions.difference_update(instruments)
         if self._connected:
             self._send_touchline("u", list(instruments))
+        self._persist_subscriptions()
+
+    def _load_persisted_subscriptions(self):
+        try:
+            with open(self._subscribe_persist_path) as f:
+                data = json.load(f)
+            if isinstance(data, list) and all(isinstance(s, str) for s in data):
+                log.info(
+                    "loaded %d persisted subscriptions from %s",
+                    len(data), self._subscribe_persist_path,
+                )
+                return set(data)
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            log.warning("failed to load persisted subscriptions: %s", exc)
+        return set()
+
+    def _persist_subscriptions(self):
+        if not self._subscribe_persist_path:
+            return
+        try:
+            with self._lock:
+                snapshot = sorted(self._subscriptions)
+            tmp = self._subscribe_persist_path + ".tmp"
+            os.makedirs(os.path.dirname(self._subscribe_persist_path) or ".", exist_ok=True)
+            with open(tmp, "w") as f:
+                json.dump(snapshot, f)
+            os.replace(tmp, self._subscribe_persist_path)
+        except Exception as exc:
+            # Best-effort: a failed snapshot degrades a future restart back
+            # to cold-cache, never breaks a live subscribe/unsubscribe call.
+            log.warning("failed to persist subscriptions: %s", exc)
 
     def get_order(self, order_no):
         return self._orders.get(order_no)
