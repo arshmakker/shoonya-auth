@@ -192,8 +192,13 @@ def test_get_quote_when_stale_beyond_max_age_then_none():
     transport.fire_open()
     transport.fire_text({"t": "ak", "s": "OK"})
     transport.fire_text({"t": "tk", "e": "NSE", "tk": "26000", "lp": "1.0"})
-    feed._store._received_at["NSE|26000"] -= 120.0
-    assert feed.get_quote("NSE", "26000", max_age_sec=30.0) is None
+    feed._store._received_at["NSE|26000"]["lp"] -= 120.0
+    # Staleness is per-field: identity metadata (e/tk) stays fresh, only the
+    # stale lp is dropped. Rejecting the whole quote for a stale price is
+    # quote_bridge's job (it requires "lp" in the result), not TickStore's.
+    quote = feed.get_quote("NSE", "26000", max_age_sec=30.0)
+    assert quote is not None
+    assert "lp" not in quote
 
 
 def test_get_quote_when_unknown_symbol_then_none():

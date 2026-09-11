@@ -71,9 +71,25 @@ def test_get_when_never_updated_then_none():
 def test_get_when_older_than_max_age_then_stale_returns_none():
     store = TickStore()
     store.update("NSE|1", {"lp": 10.0})
-    # Backdate the received_at stamp by patching monotonic source.
-    store._received_at["NSE|1"] -= 60.0
+    # Backdate the per-field received_at stamp.
+    store._received_at["NSE|1"]["lp"] -= 60.0
     assert store.get("NSE|1", max_age_sec=30.0) is None
+
+
+def test_get_when_lp_stale_but_depth_fresh_then_lp_dropped_not_whole_record():
+    """Regression (2026-09-11): a depth-only delta (no 'lp') must not make a
+    stale lp look fresh just because the key ticked. Staleness is tracked
+    per field, so a stale lp is dropped while fresh depth fields survive."""
+    store = TickStore()
+    store.update("NSE|1", {"lp": 100.0, "bp1": 99.9, "sp1": 100.1})
+    store._received_at["NSE|1"]["lp"] -= 60.0  # age lp by 60s
+    store.update("NSE|1", {"bp1": 99.5, "sp1": 100.5})  # depth-only delta
+
+    quote = store.get("NSE|1", max_age_sec=5.0)
+    assert quote is not None
+    assert "lp" not in quote, "stale lp must not be served as fresh"
+    assert quote["bp1"] == 99.5
+    assert quote["sp1"] == 100.5
 
 
 def test_get_when_within_max_age_then_fresh_returns_quote():

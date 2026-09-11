@@ -25,6 +25,10 @@ def serve_quote_from_cache(feed, method_name, args, kwargs, max_age_sec=None):
         quote = feed.get_quote(exchange, token, max_age_sec=max_age_sec)
     except Exception:
         return CACHE_MISS
-    if quote is None:
+    if quote is None or "lp" not in quote:
+        # No fresh last-price: TickStore drops stale fields individually, so
+        # a quote can come back with fresh depth but no fresh (or any) lp.
+        # get_quotes/get_quotes_safe callers need a price — fall back to REST
+        # rather than serve depth-only data as if it answered the call.
         return CACHE_MISS
     return quote

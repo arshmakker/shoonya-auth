@@ -63,18 +63,29 @@ class TickStore:
                 existing.update(fields)
             else:
                 self._ticks[key] = dict(fields)
-            self._received_at[key] = time.monotonic()
+            # Stamped per field, not per key: a depth-only delta (Noren 'tf',
+            # no 'lp') must not make an untouched, stale 'lp' look fresh just
+            # because something else on this instrument ticked (2026-09-11).
+            stamps = self._received_at.setdefault(key, {})
+            now = time.monotonic()
+            for field in fields:
+                stamps[field] = now
 
     def get(self, key, max_age_sec=None):
         with self._lock:
             quote = self._ticks.get(key)
             if quote is None:
                 return None
-            if max_age_sec is not None:
-                age = time.monotonic() - self._received_at.get(key, 0.0)
-                if age > max_age_sec:
-                    return None
-            return dict(quote)
+            if max_age_sec is None:
+                return dict(quote)
+            stamps = self._received_at.get(key, {})
+            now = time.monotonic()
+            fresh = {
+                field: value
+                for field, value in quote.items()
+                if now - stamps.get(field, 0.0) <= max_age_sec
+            }
+            return fresh or None
 
     def keys(self):
         with self._lock:
