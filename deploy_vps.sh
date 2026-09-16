@@ -12,15 +12,24 @@
 # across first and confirm the commit, then run this:
 #     ssh droplet "cd ~/git/trading/shoonya-auth && git pull origin main && git log --oneline -1"
 #
-# The second tmux session that ran `claude --remote-control` was removed
-# 2026-09-01: it monitored nothing (an idle REPL, no /loop) while holding
-# ~328MB RSS on a 1GB box. Operator alerting is main.py's own ntfy channel
-# plus tools/heartbeat_check.py on cron — neither needs a resident session.
+# A second tmux session runs `claude --remote-control`, restored 2026-09-04
+# after being removed 2026-09-01. It is NOT a monitor and must not be treated
+# as one — detection is already covered by main.py's own ntfy channel (halts,
+# _halt_on_exception) plus tools/heartbeat_check.py on cron (process dead /
+# session never started). This session exists purely so there are HANDS on the
+# box from the phone: Remote Control can only attach to a session that already
+# exists, so one cannot be started remotely after an alert fires.
+#
+# Cost is ~222MB live (~328MB RSS, ~106MB of it cold/swapped) on a 1GB box.
+# That is affordable: the sar minimums of 238-319MB available over full market
+# sessions (Aug 27/28/31) were measured WITH this session resident.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SSH_HOST="droplet"                 # see ~/.ssh/config
 REMOTE_DIR="~/git/trading/shoonya-auth"
+CLAUDE_SESSION="claude_remote"
+CLAUDE_RC_NAME="vps"               # name shown in Remote Control
 
 echo "🔌 Ensuring droplet is powered on..."
 "$SCRIPT_DIR/vps_power.sh" on
@@ -30,6 +39,15 @@ echo "🚀 Starting trading session on $SSH_HOST..."
 ssh "$SSH_HOST" "cd $REMOTE_DIR && ./start_vps.sh"
 
 echo ""
+echo "🤖 Starting Claude Code (Remote Control) on $SSH_HOST..."
+ssh "$SSH_HOST" "
+    tmux has-session -t $CLAUDE_SESSION 2>/dev/null && tmux kill-session -t $CLAUDE_SESSION
+    tmux new-session -d -s $CLAUDE_SESSION -c $REMOTE_DIR 'claude --remote-control $CLAUDE_RC_NAME'
+"
+
+echo ""
 echo "✅ Done."
 echo "   Trading session:  ssh $SSH_HOST -t 'tmux attach -t trading'"
+echo "   Claude session:   ssh $SSH_HOST -t 'tmux attach -t $CLAUDE_SESSION'"
+echo "   Claude Remote Control name: $CLAUDE_RC_NAME"
 echo "   List all live tmux sessions: ssh $SSH_HOST -t 'tmux ls | awk '\''{print \"\\033[32m\" \$0 \"\\033[0m\"}'\'''"
