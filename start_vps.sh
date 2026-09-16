@@ -122,7 +122,14 @@ done
 # Wide-net WS subscription: NIFTY index + full weekly strike chain around
 # live spot (CE+PE). Backgrounded so session start never blocks on it; log
 # lands in ws_chain_subscribe.log for post-boot inspection.
-nohup bash -c "sleep 25 && cd '$DIR' && ./venv/bin/python tools/ws_subscribe_chain.py --positions-file '$REGIME_DIR/data/open_positions.json'" > "$DIR/ws_chain_subscribe.log" 2>&1 &
+# --width 1500 (2026-09-16): the default +-800pt window never covered an IC
+# wing at entry (all 32 live ICs put wings 785-1036pt from spot), so wing
+# ticks only existed while the strategy itself subscribed them and vanished
+# the moment a position closed. That made overnight-carry replays impossible.
+# +-1500 covers every wing seen so far with ~460pt of drift headroom, at
+# ~366 NFO instruments (61 strikes x CE/PE x 3 expiries) — ~230MB/day raw,
+# ~46MB/day after compress_old_ticks.sh, against 14G free.
+nohup bash -c "sleep 25 && cd '$DIR' && ./venv/bin/python tools/ws_subscribe_chain.py --width 1500 --positions-file '$REGIME_DIR/data/open_positions.json'" > "$DIR/ws_chain_subscribe.log" 2>&1 &
 
 # MCX liquid-5 commodity futures (GOLD, SILVER, CRUDEOIL, COPPER,
 # NATURALGAS — front-2 expiries each): touchline-only, observational, no
