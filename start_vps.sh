@@ -135,6 +135,13 @@ nohup bash -c "sleep 25 && cd '$DIR' && ./venv/bin/python tools/mcx_ws_subscribe
 # one deploy cycle to stop an instance left running by a previous start.
 pkill -f "tools/mcx_collector.py" 2>/dev/null || true
 
+# Box-level trace for regimetrader loop stalls (2026-09-16: a 3m43s freeze on
+# this 1-vCPU box turned a Rs682 trail floor into a Rs2484 loss, with no
+# CPU/swap evidence to explain it). Pairs with main.py's per-cycle CYCLE log.
+pkill -f "vmstat -t 5" 2>/dev/null || true
+mkdir -p "$REGIME_DIR/logs"
+nohup vmstat -t 5 > "$REGIME_DIR/logs/vmstat_$(date +%Y%m%d).log" 2>&1 &
+
 # BankNifty spot + near-month future + options onto the WS feed: reads
 # whatever regimetrader's own SymbolManager already selected today (from
 # market_data_YYYYMMDD/raw_data/{futures,options/BANKNIFTY}), so it doesn't
