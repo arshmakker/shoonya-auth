@@ -50,7 +50,15 @@ else
 fi
 echo ""
 
-ssh "$SSH_HOST" "
+# Sessions now run ON the droplet (2026-08-26): when the regimetrader tree is
+# local, execute in-process instead of ssh'ing to ourselves.
+if [ -d "$REMOTE_REGIME" ]; then
+    RUN=(bash -c)
+else
+    RUN=(ssh "$SSH_HOST")
+fi
+
+"${RUN[@]}" "
 set -euo pipefail
 cd '$REMOTE_REGIME'
 
