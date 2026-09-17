@@ -44,6 +44,12 @@ For each pane index 0–1:
 tmux capture-pane -t trading:proxy.<N> -p -S -200
 ```
 
+**First cycle after a boot only:** confirm the wide-net chain subscriber actually ran (it died silently on 2026-09-17 and left tick coverage at the old ±800pt):
+```bash
+grep -E '^SUBSCRIBE:|^ERROR' ~/git/trading/shoonya-auth/ws_chain_subscribe.log | tail -2
+```
+No `SUBSCRIBE:` line → report `⚠️ chain subscriber failed — tick coverage not ±1500` and rerun it: `cd ~/git/trading/shoonya-auth && ./venv/bin/python tools/ws_subscribe_chain.py --width 1500 --positions-file ~/git/trading/regimetrader/data/open_positions.json`.
+
 ### Step 3 — Detect errors in captured output
 
 **IMPORTANT — scope to current run only:** The pane buffer may contain output from previous runs (e.g., a `KeyboardInterrupt` or `Traceback` from the run that was killed to restart the process). Before scanning for errors, find the LAST occurrence of a "STARTING" or "Starting" banner (e.g., `=== PCR CREDIT SPREAD SYSTEM STARTING ===`, `=== Starting Trading System ===`, `broker_proxy starting`, etc.) in the captured lines. Only scan lines AFTER that banner. If no banner is found, scan all lines.

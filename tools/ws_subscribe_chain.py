@@ -14,10 +14,12 @@ import argparse
 import json
 import os
 import sys
+import time
+import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
-from proxy_client import post, resolve
+from proxy_client import get, post, resolve
 
 _RESOLVE_WORKERS = 16
 
@@ -87,9 +89,36 @@ def position_leg_symbols(positions_path):
     return [sym.split("|", 1)[1] if "|" in sym else sym for sym in found]
 
 
+def _retry(fn, attempts=4, delays=(5, 10, 20), label=""):
+    """Broker REST is routinely slow for the first minute after boot — /health
+    answered but get_quotes timed out at 15s on 2026-09-17, killing this script
+    before it subscribed anything. Retry with backoff instead of tracing out."""
+    for i in range(attempts):
+        try:
+            return fn()
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            if i == attempts - 1:
+                print(f"ERROR: {label} failed after {attempts} attempts: {exc}")
+                return None
+            wait = delays[min(i, len(delays) - 1)]
+            print(f"{label} attempt {i + 1} failed ({exc}); retrying in {wait}s")
+            time.sleep(wait)
+
+
 def fetch_spot():
-    quote = post("/call", {"method": "get_quotes", "args": ["NSE", "26000"]}) or {}
+    # WS cache first: served locally, no broker round-trip.
+    tick = get(f"/tick/{INDEX_SPEC}") or {}
+    if tick.get("lp"):
+        return float(tick["lp"])
+    quote = _retry(
+        lambda: post("/call", {"method": "get_quotes", "args": ["NSE", "26000"]}, timeout=30),
+        label="get_quotes NSE|26000",
+    ) or {}
     return float(quote.get("lp") or 0)
+
+
+def resolve_safe(symbol):
+    return _retry(lambda: resolve(symbol), attempts=3, delays=(2, 5), label=f"resolve {symbol}")
 
 
 def main():
@@ -131,17 +160,19 @@ def main():
     # them out instead of paying (network latency x len(symbols)) serially
     # at boot, while this backgrounds ahead of the first strategy call.
     with ThreadPoolExecutor(max_workers=_RESOLVE_WORKERS) as pool:
-        for sym, spec in zip(symbols, pool.map(resolve, symbols)):
+        for sym, spec in zip(symbols, pool.map(resolve_safe, symbols)):
             if spec:
                 specs.append(spec)
             else:
                 missing.append(sym)
 
     print(f"resolved {len(specs) - 1}/{len(symbols)}; subscribing {len(specs)} total")
-    result = post("/subscribe", {"instruments": specs})
+    result = _retry(lambda: post("/subscribe", {"instruments": specs}, timeout=60), label="/subscribe")
     print("SUBSCRIBE:", result)
     if missing:
         print(f"unresolved ({len(missing)}): {', '.join(missing[:10])}{' ...' if len(missing) > 10 else ''}")
+    if result is None:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
