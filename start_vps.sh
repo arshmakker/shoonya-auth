@@ -78,6 +78,14 @@ tmux set-option -t "$SESSION" pane-border-format " #{pane_title} "
 # SHOONYA_FEED_MODE=ws is hybrid minus the shadow validator: same cache-first
 # serving, no periodic REST re-check. Diagnostic use only — it leaves WS
 # accuracy unadjudicated, so it does not belong on a live trading day.
+# SHOONYA_SHADOW_INTERVAL=300 (2026-09-18): the validator sleeps this long
+# AFTER each full pass, not between starts, and a 461-instrument pass takes
+# ~142s — so the stock 30s left it sweeping ~83% of the time, saturating
+# api_helper's shared quote-slot limiter and starving the live path. Measured
+# that day: hybrid ran 15.9% of collector cycles a leg short with 24
+# get_quotes timeouts over 207 cycles, against 1.8% and ZERO timeouts over 759
+# cycles with the validator off. 300s drops the duty cycle to ~32% and keeps
+# validation. Lower it only if a pass needs to be tighter than ~7min.
 # SHOONYA_TICK_PERSIST_DIR turns on in-process persistence of every subscribed
 # instrument (option legs, MCX, index) to per-day CSVs. In-process because the
 # proxy already owns the tick store: a separate collector would cost another
@@ -95,7 +103,7 @@ tmux set-option -t "$SESSION" pane-border-format " #{pane_title} "
 # _DEFAULT_SHUTDOWN_TIME there. A malformed value is fatal at startup by design,
 # so the proxy will refuse to boot rather than quietly end the day at 15:40 and
 # lose the whole commodity evening.
-tmux send-keys -t "$SESSION:proxy" "cd $DIR && SHOONYA_FEED_MODE=hybrid SHOONYA_SHUTDOWN_TIME=23:58 SHOONYA_TICK_PERSIST_DIR='$REGIME_DIR' ./venv/bin/python broker_proxy.py" Enter
+tmux send-keys -t "$SESSION:proxy" "cd $DIR && SHOONYA_FEED_MODE=hybrid SHOONYA_SHADOW_INTERVAL=300 SHOONYA_SHUTDOWN_TIME=23:58 SHOONYA_TICK_PERSIST_DIR='$REGIME_DIR' ./venv/bin/python broker_proxy.py" Enter
 tmux select-pane -t "$SESSION:proxy.0" -T "🔌 broker_proxy"
 
 # Wait up to 90s for proxy to be healthy
