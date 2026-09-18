@@ -75,6 +75,9 @@ tmux set-option -t "$SESSION" pane-border-format " #{pane_title} "
 
 # WS feed: hybrid mode — fresh cached ticks served to consumers, REST fallback.
 # Flip back to SHOONYA_FEED_MODE=shadow if validation ever needs re-running.
+# SHOONYA_FEED_MODE=ws is hybrid minus the shadow validator: same cache-first
+# serving, no periodic REST re-check. Diagnostic use only — it leaves WS
+# accuracy unadjudicated, so it does not belong on a live trading day.
 # SHOONYA_TICK_PERSIST_DIR turns on in-process persistence of every subscribed
 # instrument (option legs, MCX, index) to per-day CSVs. In-process because the
 # proxy already owns the tick store: a separate collector would cost another

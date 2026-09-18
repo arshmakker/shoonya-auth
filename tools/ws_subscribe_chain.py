@@ -17,7 +17,7 @@ import sys
 import time
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from proxy_client import get, post, resolve
 
@@ -27,6 +27,9 @@ INDEX_SPEC = "NSE|26000"
 _POSITION_LEG_KEYS = ("sc_sym", "sp_sym", "lc_sym", "lp_sym")
 DEFAULT_POSITIONS_FILE = os.path.join(
     os.path.dirname(__file__), "..", "..", "regimetrader", "data", "open_positions.json"
+)
+DEFAULT_SYMBOL_MASTER = os.path.join(
+    os.path.dirname(__file__), "..", "..", "regimetrader", "NFO_symbols.txt"
 )
 
 
@@ -53,6 +56,42 @@ def nifty_chain_symbols(expiry, spot, width=800, step=50):
         out.append(f"NIFTY{tag}C{strike}")
         out.append(f"NIFTY{tag}P{strike}")
     return out
+
+
+def nifty_future_symbols(master_path, today, count=2):
+    """Trading symbols for the nearest NIFTY index futures contracts.
+
+    DataCollector polls the front-month future every cycle, but this script
+    only ever built option strikes — so every futures quote fell through to
+    REST, undamped by any WS tick (2026-09-18: 9 of 431 cycles lost FUTIDX
+    entirely when that REST call failed, and futures feed the day
+    classification that gates IC entry). Read the contract from the symbol
+    master instead of computing an expiry date: the monthly convention is
+    the exchange's to change, not ours to hardcode. Front-two so the roll
+    leaves no gap.
+    """
+    try:
+        with open(master_path) as f:
+            rows = f.read().splitlines()
+    except OSError:
+        print(f"WARNING: symbol master unreadable ({master_path}); futures not subscribed")
+        return []
+
+    dated = []
+    for row in rows:
+        parts = row.split(",")
+        if len(parts) < 7 or parts[3] != "NIFTY" or parts[6] != "FUTIDX":
+            continue
+        try:
+            expiry = datetime.strptime(parts[5], "%d-%b-%Y").date()
+        except ValueError:
+            continue
+        if expiry >= today:
+            dated.append((expiry, parts[4]))
+
+    if not dated:
+        print("WARNING: no live NIFTY FUTIDX rows in symbol master; futures not subscribed")
+    return [sym for _, sym in sorted(dated)[:count]]
 
 
 def position_leg_symbols(positions_path):
@@ -125,6 +164,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--width", type=int, default=800)
     parser.add_argument("--positions-file", default=DEFAULT_POSITIONS_FILE)
+    parser.add_argument("--symbol-master", default=DEFAULT_SYMBOL_MASTER)
     parser.add_argument("spot", nargs="?", type=float, default=None)
     args = parser.parse_args()
 
@@ -141,6 +181,13 @@ def main():
             if sym not in seen:
                 seen.add(sym)
                 symbols.append(sym)
+
+    future_symbols = [s for s in nifty_future_symbols(args.symbol_master, date.today()) if s not in seen]
+    for sym in future_symbols:
+        seen.add(sym)
+        symbols.append(sym)
+    if future_symbols:
+        print(f"nifty futures: {', '.join(future_symbols)}")
 
     # An open position's own legs must always be covered, even when they've
     # drifted outside the spot window (2026-08-26 root cause of the day's

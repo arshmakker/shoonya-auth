@@ -28,7 +28,7 @@ from flask import Flask, jsonify, request
 # Must run from shoonya-auth root (or sys.path must include it).
 sys.path.insert(0, os.path.dirname(__file__))
 from api_helper import ShoonyaApiPy
-from quote_bridge import CACHE_MISS, QUOTE_METHODS, serve_quote_from_cache
+from quote_bridge import CACHE_MISS, QUOTE_METHODS, quote_instrument, serve_quote_from_cache
 from shadow import run_shadow_loop
 from tick_persist import IST as _IST, start as start_tick_persist
 from ws_feed import (
@@ -237,6 +237,8 @@ def call_method():
             # had no way to confirm which source fed a given monitor cycle).
             cached["_src"] = "ws"
             return jsonify(cached), 200
+        _inst = quote_instrument(args, kwargs)
+        log.info("REST fallback: %s", f"{_inst[0]}|{_inst[1]}" if _inst else method_name)
 
     try:
         result = method(*args, **kwargs)
@@ -410,20 +412,25 @@ if __name__ == "__main__":
         )
 
         _cache_serving_enabled = cache_serving_for(feed_mode)
-        if validator_runs_for(feed_mode):
-            interval = float(os.environ.get("SHOONYA_SHADOW_INTERVAL", "30").strip() or 30)
+        _validator_on = validator_runs_for(feed_mode)
+        interval = float(os.environ.get("SHOONYA_SHADOW_INTERVAL", "30").strip() or 30)
+        if _validator_on:
             threading.Thread(
                 target=run_shadow_loop,
                 args=(_api, _feed, interval),
                 daemon=True,
                 name="ws-shadow-validator",
             ).start()
-            log.info(
-                "SHOONYA_FEED_MODE=%s — cache-serving=%s, validating subscribed instruments every %ss",
-                feed_mode,
-                _cache_serving_enabled,
-                interval,
-            )
+        # Outside the validator branch on purpose: a mode that runs no
+        # validator still has to announce itself, or a later session has no
+        # way to tell which config produced its data (2026-09-18: neither
+        # ws-mode boot logged a mode line at all).
+        log.info(
+            "SHOONYA_FEED_MODE=%s — cache-serving=%s, validator=%s",
+            feed_mode,
+            _cache_serving_enabled,
+            f"every {interval}s" if _validator_on else "off",
+        )
 
     t = threading.Thread(
         target=_market_close_watchdog,

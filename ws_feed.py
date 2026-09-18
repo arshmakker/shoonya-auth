@@ -30,7 +30,7 @@ log = logging.getLogger("ws_feed")
 _FEED_MESSAGE_TYPES = frozenset({"tk", "tf", "dk", "df"})
 _ORDER_MESSAGE_TYPE = "om"
 _NEVER_RECEIVED_AGE_SEC = 1e9
-_VALID_MODES = frozenset({"rest", "shadow", "hybrid"})
+_VALID_MODES = frozenset({"rest", "shadow", "hybrid", "ws"})
 
 
 def normalize_mode(raw):
@@ -39,7 +39,7 @@ def normalize_mode(raw):
 
 
 def cache_serving_for(mode):
-    return normalize_mode(mode) == "hybrid"
+    return normalize_mode(mode) in ("hybrid", "ws")
 
 
 def validator_runs_for(mode):
