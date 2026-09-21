@@ -73,19 +73,30 @@ tmux new-session -d -s "$SESSION" -n "proxy" -x 220 -y 50
 tmux set-option -t "$SESSION" pane-border-status top
 tmux set-option -t "$SESSION" pane-border-format " #{pane_title} "
 
-# WS feed: hybrid mode — fresh cached ticks served to consumers, REST fallback.
-# Flip back to SHOONYA_FEED_MODE=shadow if validation ever needs re-running.
-# SHOONYA_FEED_MODE=ws is hybrid minus the shadow validator: same cache-first
-# serving, no periodic REST re-check. Diagnostic use only — it leaves WS
-# accuracy unadjudicated, so it does not belong on a live trading day.
+# WS feed: ws mode — cache-first serving with REST fallback, no shadow validator.
+# Flip to SHOONYA_FEED_MODE=shadow if validation ever needs re-running, or to
+# hybrid to run the validator alongside live serving.
 # SHOONYA_SHADOW_INTERVAL=300 (2026-09-18): the validator sleeps this long
 # AFTER each full pass, not between starts, and a 461-instrument pass takes
 # ~142s — so the stock 30s left it sweeping ~83% of the time, saturating
 # api_helper's shared quote-slot limiter and starving the live path. Measured
 # that day: hybrid ran 15.9% of collector cycles a leg short with 24
 # get_quotes timeouts over 207 cycles, against 1.8% and ZERO timeouts over 759
-# cycles with the validator off. 300s drops the duty cycle to ~32% and keeps
-# validation. Lower it only if a pass needs to be tighter than ~7min.
+# cycles with the validator off. 300s was an interpolation from those two
+# points, never measured — it holds the duty cycle near 32%.
+#
+# 2026-09-21: that interpolation was optimistic and hybrid is off the live
+# path. At 300s the validator still starved it: 23 get_quotes timeouts, main
+# loop cycles stretched to 76s against a 30s budget, and the IC monitor logged
+# 31 "short leg quote unavailable — skipping cycle" warnings WITH A LIVE
+# POSITION OPEN, i.e. the risk check did not run on those cycles. A 90s
+# sustained breach is what arms a trail exit, so a ~150s blind window can eat
+# one whole. The prior note here called ws mode diagnostic-only because it
+# leaves WS accuracy unadjudicated; that concern is real but secondary to
+# running the stop logic, and 2026-09-21's own shadow output bounds it —
+# 13-18 divergences per 461 instruments, all sub-rupee far-OTM strikes where
+# one tick is several percent, no systematic drift. Re-adjudicate by running
+# a shadow/hybrid session on a FLAT day rather than alongside open risk.
 # SHOONYA_TICK_PERSIST_DIR turns on in-process persistence of every subscribed
 # instrument (option legs, MCX, index) to per-day CSVs. In-process because the
 # proxy already owns the tick store: a separate collector would cost another
@@ -103,7 +114,7 @@ tmux set-option -t "$SESSION" pane-border-format " #{pane_title} "
 # _DEFAULT_SHUTDOWN_TIME there. A malformed value is fatal at startup by design,
 # so the proxy will refuse to boot rather than quietly end the day at 15:40 and
 # lose the whole commodity evening.
-tmux send-keys -t "$SESSION:proxy" "cd $DIR && SHOONYA_FEED_MODE=hybrid SHOONYA_SHADOW_INTERVAL=300 SHOONYA_SHUTDOWN_TIME=23:58 SHOONYA_TICK_PERSIST_DIR='$REGIME_DIR' ./venv/bin/python broker_proxy.py" Enter
+tmux send-keys -t "$SESSION:proxy" "cd $DIR && SHOONYA_FEED_MODE=ws SHOONYA_SHADOW_INTERVAL=300 SHOONYA_SHUTDOWN_TIME=23:58 SHOONYA_TICK_PERSIST_DIR='$REGIME_DIR' ./venv/bin/python broker_proxy.py" Enter
 tmux select-pane -t "$SESSION:proxy.0" -T "🔌 broker_proxy"
 
 # Wait up to 90s for proxy to be healthy
