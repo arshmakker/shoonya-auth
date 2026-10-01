@@ -40,8 +40,18 @@ ssh "$SSH_HOST" "cd $REMOTE_DIR && ./start_vps.sh"
 
 echo ""
 echo "🤖 Starting Claude Code (Remote Control) on $SSH_HOST..."
+# Kill-session alone SIGHUPs the claude process abruptly, which can skip its
+# cloud-side Remote Control deregistration and leave a stale '$CLAUDE_RC_NAME'
+# entry behind in the browser session list even though the local process is
+# gone. Give it a chance to exit cleanly (Ctrl-C, then a beat) before the
+# tmux-level kill, so the old registration is cleared before the new one
+# comes up under the same name.
 ssh "$SSH_HOST" "
-    tmux has-session -t $CLAUDE_SESSION 2>/dev/null && tmux kill-session -t $CLAUDE_SESSION
+    if tmux has-session -t $CLAUDE_SESSION 2>/dev/null; then
+        tmux send-keys -t $CLAUDE_SESSION C-c
+        sleep 2
+        tmux kill-session -t $CLAUDE_SESSION 2>/dev/null || true
+    fi
     tmux new-session -d -s $CLAUDE_SESSION -c $REMOTE_DIR 'claude --remote-control $CLAUDE_RC_NAME'
 "
 
