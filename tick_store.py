@@ -35,12 +35,24 @@ _PASSTHROUGH_FIELDS = ("ts", "e", "tk", "ft")
 # ft) are identity metadata, never staleness-gated either.
 _AGE_FILTERED_FIELDS = frozenset({"lp", "bp1", "sp1", "bq1", "sq1"})
 
+# Noren sends only CHANGED fields, so a resting wing with an unchanged best
+# price but a ticking size sends bq1/sq1 and no bp1/sp1 (2026-10-06: every
+# post-open "stale/missing bid-ask" had fresh sizes and a missing price). A
+# fresh NON-ZERO size tick on a side vouches for that side's price — a price
+# move would have been sent as bp1/sp1. Zero size is an emptied side and
+# vouches for nothing.
+_PRICE_VOUCHED_BY_QTY = {"bp1": "bq1", "sp1": "sq1"}
+# Likewise lp is vouched by a cumulative volume that actually ROSE: a trade at
+# an unchanged price sends v but not lp. An unchanged or falling v, or the first
+# v ever seen, proves nothing (see _v_rose_at).
+
 
 class TickStore:
     def __init__(self):
         self._lock = threading.Lock()
         self._ticks = {}
         self._received_at = {}
+        self._v_rose_at = {}
 
     def normalize_touchline(self, msg):
         """Map an Noren WS touchline/depth message to (instrument_key, quote).
@@ -68,6 +80,10 @@ class TickStore:
     def update(self, key, fields):
         with self._lock:
             existing = self._ticks.get(key)
+            now = time.monotonic()
+            prev_v = existing.get("v") if existing is not None else None
+            if prev_v is not None and "v" in fields and fields["v"] > prev_v:
+                self._v_rose_at[key] = now
             if existing is not None:
                 existing.update(fields)
             else:
@@ -76,7 +92,6 @@ class TickStore:
             # no 'lp') must not make an untouched, stale 'lp' look fresh just
             # because something else on this instrument ticked (2026-09-11).
             stamps = self._received_at.setdefault(key, {})
-            now = time.monotonic()
             for field in fields:
                 stamps[field] = now
 
@@ -89,10 +104,25 @@ class TickStore:
                 return dict(quote)
             stamps = self._received_at.get(key, {})
             now = time.monotonic()
+
+            v_rose_at = self._v_rose_at.get(key)
+
+            def _is_fresh(field):
+                if now - stamps.get(field, 0.0) <= max_age_sec:
+                    return True
+                if field == "lp":
+                    return v_rose_at is not None and now - v_rose_at <= max_age_sec
+                qty_field = _PRICE_VOUCHED_BY_QTY.get(field)
+                return bool(
+                    qty_field
+                    and quote.get(qty_field, 0) > 0
+                    and now - stamps.get(qty_field, 0.0) <= max_age_sec
+                )
+
             fresh = {
                 field: value
                 for field, value in quote.items()
-                if field not in _AGE_FILTERED_FIELDS or now - stamps.get(field, 0.0) <= max_age_sec
+                if field not in _AGE_FILTERED_FIELDS or _is_fresh(field)
             }
             return fresh or None
 
