@@ -127,6 +127,13 @@ class Watcher:
                 return f"process exited (now: {cmd})" if dead == "1" or cmd in SHELLS else None
         return "pane missing"
 
+    @staticmethod
+    def eod_clean_exit() -> bool:
+        try:
+            return json.loads(POS_FILE.read_text()).get("last_shutdown_reason") == "eod"
+        except Exception:
+            return False
+
     def new_errors_log(self, path: Path) -> list[str]:
         """Error lines appended to a log file since the last look (byte offset; no re-reads)."""
         try:
@@ -180,6 +187,18 @@ class Watcher:
         return {p["tsym"]: int(p["netqty"]) for p in d if int(p.get("netqty", 0)) != 0}
 
     @staticmethod
+    def _leg_px(mark: dict) -> float:
+        """ltp, or the bid/ask mid when ltp is 0/missing (the bot treats ltp<=0 as no mark; a 0 here
+        once produced a phantom -Rs7.4k alert on a +Rs1.4k carry)."""
+        ltp = float(mark.get("ltp") or 0)
+        if ltp > 0:
+            return ltp
+        bid, ask = float(mark.get("bid") or 0), float(mark.get("ask") or 0)
+        if bid > 0 and ask > 0:
+            return (bid + ask) / 2
+        raise ValueError("no usable price")
+
+    @staticmethod
     def ic_marks() -> list[str]:
         """Alert text for any open IC at/below the carry-stop level or at/below its armed floor."""
         d = json.loads(POS_FILE.read_text())
@@ -189,7 +208,7 @@ class Watcher:
             if not p or p.get("call_spread_closed") or p.get("put_spread_closed"):
                 continue
             try:
-                m = {k: float(lm[p[f"{k}_sym"]]["ltp"]) for k in ("sc", "sp", "lc", "lp")}
+                m = {k: Watcher._leg_px(lm[p[f"{k}_sym"]]) for k in ("sc", "sp", "lc", "lp")}
             except (KeyError, TypeError, ValueError):
                 out.append(f"{sid}: leg marks missing")
                 continue
@@ -247,6 +266,8 @@ class Watcher:
 
         for idx, name in PANES.items():
             dead = self.pane_dead(idx)
+            if dead and name == "regimetrader" and (not is_live or now.strftime("%H:%M") >= "15:30") and self.eod_clean_exit():
+                dead = None  # SESSION_END (15:30) exit with positions carried: expected, not a crash
             self.set(f"{name}.process", dead, out)
             if dead and idx == 0 and self.restart_proxy and is_live:
                 self.maybe_relaunch_proxy(now, out)
@@ -263,7 +284,8 @@ class Watcher:
             self.set("proxy.health", f"unreachable ({e.__class__.__name__})", out)
 
         log = RT / f"logs/ic_system_{now:%Y%m%d}.log"
-        if is_live:
+        session_over = now.strftime("%H:%M") >= "15:30" and self.eod_clean_exit()
+        if is_live and not session_over:
             try:
                 age = time.time() - log.stat().st_mtime
                 self.set("regimetrader.log", None if age < LOG_FRESH_SEC else f"log silent {age:.0f}s (hung?)", out)
