@@ -18,22 +18,17 @@ tmux has-session -t trading 2>/dev/null && echo "RUNNING" || echo "NOT STARTED"
   ```bash
   tmux list-panes -t trading:proxy -F "Pane #{pane_index}: #{pane_title} (#{pane_pid})"
   ```
-- Report the status briefly, then immediately start the monitoring loop:
+- Report the status briefly, then start the alert-driven watcher under the Monitor tool (no polling loop; it prints only on state change, so quiet days cost no tokens):
 
   ```
-  start /loop 10m monitor-trading at 9:07am IST
+  cd ~/git/trading/shoonya-auth && python3 -u tools/monitor_trading.py --watch --interval 60 2>&1
   ```
+  Re-arm it when Monitor expires (30 min max). See `.claude/skills/monitor-trading/SKILL.md`.
 
-  This will invoke the `monitor-trading` skill every 10 minutes to check broker_proxy and regimetrader for errors, attempt code fixes, and restart any crashed services.
-
-### What the monitor does each cycle
-- Captures the last 200 lines from broker_proxy and regimetrader panes
-- Detects Python errors, tracebacks, and silent crashes
-- Attempts minimal code fixes for clear errors (ImportError, SyntaxError, etc.)
-- Restarts the affected pane
-- Reports a one-line status per pane
-
-See `.claude/skills/monitor-trading/SKILL.md` for full details.
+### What the monitor does
+- Checks process liveness, broker_proxy `/health` and WS feed, regimetrader log freshness, new error lines, engine-vs-broker positions, and IC marks vs stops
+- Alerts only on change (`ALERT`/`OK recovered`), plus a `DIGEST` line at 15:45 IST
+- Never edits code and never restarts regimetrader. With `--restart-proxy` it relaunches a DEAD broker_proxy only on a broker-confirmed flat book (market hours, 10 min cooldown, 2/day); otherwise a dead pane is reported and restarts are manual
 
 ---
 
